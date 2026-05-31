@@ -1,5 +1,6 @@
 """
 图像识别模块 - 基于 OpenCV 模板匹配
+支持区域裁剪检测（右下角 UI、上半部遛鱼）
 """
 
 import os
@@ -22,8 +23,6 @@ class ImageRecognizer:
         """加载模板图片（带缓存）"""
         if name in self._template_cache:
             return self._template_cache[name]
-
-        # 支持 .png / .jpg
         for ext in (".png", ".jpg", ".jpeg"):
             path = os.path.join(self.assets_dir, f"{name}{ext}")
             if os.path.exists(path):
@@ -31,7 +30,6 @@ class ImageRecognizer:
                 if img is not None:
                     self._template_cache[name] = img
                     return img
-
         raise FileNotFoundError(f"模板图片未找到: {name}（已搜索 .png/.jpg）")
 
     def match_template(
@@ -45,6 +43,7 @@ class ImageRecognizer:
 
         Returns:
             (center_x, center_y, confidence) 或 None
+            坐标相对于传入 screenshot 的左上角
         """
         threshold = threshold or config.match_threshold
         template = self._load_template(template_name)
@@ -53,46 +52,45 @@ class ImageRecognizer:
             return None
 
         result = cv2.matchTemplate(screenshot, template, cv2.TM_CCOEFF_NORMED)
-        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+        _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
         if max_val >= threshold:
             h, w = template.shape[:2]
             cx = max_loc[0] + w // 2
             cy = max_loc[1] + h // 2
             return (cx, cy, float(max_val))
-
         return None
 
-    def match_all(
+    def match_in_region(
         self,
         screenshot: np.ndarray,
         template_name: str,
+        region: Tuple[int, int, int, int],
         threshold: Optional[float] = None,
-    ) -> List[Tuple[int, int, float]]:
-        """查找所有匹配位置（多目标匹配）"""
-        threshold = threshold or config.match_threshold
-        template = self._load_template(template_name)
+    ) -> Optional[Tuple[int, int, float]]:
+        """
+        在截图的指定区域内查找模板。
 
-        if template.shape[0] > screenshot.shape[0] or template.shape[1] > screenshot.shape[1]:
-            return []
+        Args:
+            region: (x, y, width, height) — 相对于 screenshot 的裁剪区域
 
-        result = cv2.matchTemplate(screenshot, template, cv2.TM_CCOEFF_NORMED)
-        h, w = template.shape[:2]
-        locations = np.where(result >= threshold)
+        Returns:
+            相对于 screenshot 的 (cx, cy, confidence)，或 None
+        """
+        x, y, w, h = region
+        h_img, w_img = screenshot.shape[:2]
+        x = max(0, min(x, w_img - 1))
+        y = max(0, min(y, h_img - 1))
+        w = min(w, w_img - x)
+        h = min(h, h_img - y)
+        if w <= 0 or h <= 0:
+            return None
 
-        # 非极大值抑制避免重复
-        matches: List[Tuple[int, int, float]] = []
-        mask = np.zeros(result.shape, dtype=np.uint8)
-        for pt in zip(*locations[::-1]):
-            if mask[pt[1], pt[0]]:
-                continue
-            cx = pt[0] + w // 2
-            cy = pt[1] + h // 2
-            confidence = float(result[pt[1], pt[0]])
-            matches.append((cx, cy, confidence))
-            cv2.rectangle(mask, (pt[0], pt[1]), (pt[0] + w, pt[1] + h), 1, -1)
-
-        return matches
+        roi = screenshot[y:y+h, x:x+w]
+        result = self.match_template(roi, template_name, threshold)
+        if result is None:
+            return None
+        return (result[0] + x, result[1] + y, result[2])
 
     def is_present(
         self,
@@ -100,96 +98,107 @@ class ImageRecognizer:
         template_name: str,
         threshold: Optional[float] = None,
     ) -> bool:
-        """检查模板是否存在于截图中"""
         return self.match_template(screenshot, template_name, threshold) is not None
 
-    def detect_progress_bar(
+    # ── 场景级检测 ──
+
+    def detect_bottom_right_ui(
         self,
         screenshot: np.ndarray,
-        bar_template: str = "progress_bar_bg",
-        float_template: str = "float_marker",
-        green_zone_template: str = "green_zone",
+    ) -> Optional[str]:
+        """
+        检测右下角区域的按键提示 UI。
+
+        裁剪右下角 1/3 区域，依次匹配 'key_e' 和 'key_f' 模板。
+
+        Returns:
+            "E" / "F" / None
+        """
+        h, w = screenshot.shape[:2]
+        region = (w * 2 // 3, h * 2 // 3, w // 3, h // 3)
+
+        for key in ("key_e", "key_f"):
+            if self.match_in_region(screenshot, key, region, threshold=0.75) is not None:
+                return key[-1].upper()
+        return None
+
+    def detect_reeling(
+        self,
+        screenshot: np.ndarray,
     ) -> Optional[dict]:
         """
-        检测遛鱼进度条状态。
+        在上半部分画面中检测遛鱼元素。
+
+        仅匹配 green_zone 和 float_marker，比较二者 x 坐标。
 
         Returns:
             {
-                "bar_left": int,      # 进度条左边界 x
-                "bar_right": int,     # 进度条右边界 x
-                "bar_y": int,         # 进度条 y 坐标
-                "float_x": int,       # 浮标中心 x
-                "green_left": int,    # 绿色区域左边界 x
-                "green_right": int,   # 绿色区域右边界 x
+                "green_x": int,     # green_zone 中心 x
+                "float_x": int,     # float_marker 中心 x
+                "action": "A"|"D"|"NONE",
             }
-            或 None（未检测到进度条）
+            或 None（未检测到进度条元素）
         """
-        # 检测进度条背景
-        bar = self.match_template(screenshot, bar_template)
-        if bar is None:
+        h, w = screenshot.shape[:2]
+        upper = screenshot[0:h//2, :]
+
+        green = self.match_template(upper, "green_zone")
+        marker = self.match_template(upper, "float_marker")
+
+        if green is None or marker is None:
             return None
 
-        # 检测绿色区域
-        green = self.match_template(screenshot, green_zone_template)
-        if green is None:
-            return None
-
-        # 检测浮标
-        float_marker = self.match_template(screenshot, float_template)
-        if float_marker is None:
-            return None
-
-        # 加载模板获取宽度
-        bar_tpl = self._load_template(bar_template)
-        green_tpl = self._load_template(green_zone_template)
-
-        bar_w = bar_tpl.shape[1]
-        green_w = green_tpl.shape[1]
-
-        return {
-            "bar_left": bar[0] - bar_w // 2,
-            "bar_right": bar[0] + bar_w // 2,
-            "bar_y": bar[1],
-            "float_x": float_marker[0],
-            "green_left": green[0] - green_w // 2,
-            "green_right": green[0] + green_w // 2,
+        result = {
+            "green_x": green[0],
+            "float_x": marker[0],
         }
 
+        # 判断方向：green_zone 在 float_marker 左边 → A，右边 → D
+        offset = result["green_x"] - result["float_x"]
+        dead_zone = 5  # 像素级死区
+        if abs(offset) <= dead_zone:
+            result["action"] = "NONE"
+        elif offset < 0:
+            result["action"] = "A"
+        else:
+            result["action"] = "D"
+
+        return result
+
+    def detect_bait_exchange_ui(
+        self,
+        screenshot: np.ndarray,
+    ) -> dict:
+        """
+        检测换鱼饵界面各元素。
+
+        Returns:
+            {"exchange_bait": (cx,cy) or None,
+             "bait": (cx,cy) or None,
+             "exchange": (cx,cy) or None}
+        """
+        result = {}
+        for name in ("exchange_bait", "bait", "exchange"):
+            m = self.match_template(screenshot, name)
+            result[name] = (m[0], m[1]) if m else None
+        return result
+
+    def detect_catch_result(
+        self,
+        screenshot: np.ndarray,
+    ) -> Optional[Tuple[str, int, int]]:
+        """
+        检测遛鱼结果。
+
+        Returns:
+            ("success", cx, cy) 或 ("fail", cx, cy) 或 None
+        """
+        for name in ("catch_success", "catch_fail"):
+            m = self.match_template(screenshot, name)
+            if m is not None:
+                return (name, m[0], m[1])
+        return None
+
     def clear_cache(self):
-        """清除模板缓存"""
         self._template_cache.clear()
 
-
-# ---- 遛鱼控制逻辑（不依赖类） ----
-
-def compute_reel_action(
-    bar_info: dict,
-    dead_zone_ratio: Optional[float] = None,
-) -> str:
-    """
-    根据进度条状态计算遛鱼操作。
-
-    Args:
-        bar_info: detect_progress_bar 返回的字典
-        dead_zone_ratio: 绿色区域内的死区比例
-
-    Returns:
-        "LT"  - 需要向左移动
-        "RT"  - 需要向右移动
-        "NONE" - 在死区内，无需操作
-    """
-    dz = dead_zone_ratio if dead_zone_ratio is not None else config.reel_dead_zone_ratio
-
-    green_center = (bar_info["green_left"] + bar_info["green_right"]) / 2
-    green_half_width = (bar_info["green_right"] - bar_info["green_left"]) / 2
-    dead_zone = green_half_width * dz
-
-    float_x = bar_info["float_x"]
-    offset = float_x - green_center
-
-    if abs(offset) <= dead_zone:
-        return "NONE"
-    elif offset < 0:
-        return "RT"  # 浮标偏左，需要向右移动
-    else:
-        return "LT"  # 浮标偏右，需要向左移动

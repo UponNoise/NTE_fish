@@ -15,14 +15,15 @@ from src.state_machine import FishState
 
 # 状态中文映射
 STATE_NAMES: dict[FishState, str] = {
-    FishState.IDLE: "空闲",
-    FishState.CASTING: "抛竿",
-    FishState.WAITING_BITE: "等待上钩",
-    FishState.HOOKING: "起勾",
-    FishState.REELING: "遛鱼",
-    FishState.CHECKING_BAIT: "检查鱼饵",
-    FishState.SELLING: "出售渔获",
-    FishState.BUYING_BAIT: "购买鱼饵",
+    FishState.CHECK_READY: "检测准备界面",
+    FishState.INIT_SETUP: "首次换饵",
+    FishState.CAST: "抛竿",
+    FishState.WAIT_BITE: "等待上钩",
+    FishState.HOOK: "起勾",
+    FishState.REELING: "遛鱼(A/D)",
+    FishState.COLLECT: "收杆",
+    FishState.CHECK_BAIT: "检查鱼饵",
+    FishState.SELL_BUY: "出售购买(占位)",
     FishState.STOPPED: "已停止",
 }
 
@@ -36,7 +37,7 @@ class FishingBotGUI:
 
         # 主窗口
         self.root = tk.Tk()
-        self.root.title("异环钓鱼自动化 v1.1")
+        self.root.title("异环钓鱼自动化 v2.0 (键鼠)")
         self.root.geometry("720x720")
         self.root.resizable(True, True)
 
@@ -47,7 +48,7 @@ class FishingBotGUI:
         self.bot.set_on_stopped(self._on_bot_stopped)
 
         self._build_ui()
-        self._update_state_display(FishState.IDLE, FishState.IDLE)
+        self._update_state_display(FishState.CHECK_READY, FishState.CHECK_READY)
         self._run_startup_checks()
 
     # ---- UI 构建 ----
@@ -176,38 +177,20 @@ class FishingBotGUI:
         notebook.add(reel_frame, text="遛鱼设置")
 
         row = 0
-        ttk.Label(reel_frame, text="遛鱼轻触最短 (秒):").grid(
+        ttk.Label(reel_frame, text="遛鱼按键时长 (秒):").grid(
             row=row, column=0, sticky=tk.W, pady=2
         )
-        self.var_reel_min = tk.DoubleVar(value=config.reel_press_min)
+        self.var_reel_press = tk.DoubleVar(value=config.reel_press_duration)
         ttk.Spinbox(
-            reel_frame, from_=0.01, to=0.3, increment=0.01,
-            textvariable=self.var_reel_min, width=8
-        ).grid(row=row, column=1, sticky=tk.W, pady=2)
-
-        row += 1
-        ttk.Label(reel_frame, text="遛鱼轻触最长 (秒):").grid(
-            row=row, column=0, sticky=tk.W, pady=2
-        )
-        self.var_reel_max = tk.DoubleVar(value=config.reel_press_max)
-        ttk.Spinbox(
-            reel_frame, from_=0.03, to=0.5, increment=0.01,
-            textvariable=self.var_reel_max, width=8
-        ).grid(row=row, column=1, sticky=tk.W, pady=2)
-
-        row += 1
-        ttk.Label(reel_frame, text="死区比例 (0~1):").grid(
-            row=row, column=0, sticky=tk.W, pady=2
-        )
-        self.var_dead_zone = tk.DoubleVar(value=config.reel_dead_zone_ratio)
-        ttk.Spinbox(
-            reel_frame, from_=0.0, to=0.8, increment=0.05,
-            textvariable=self.var_dead_zone, width=8
+            reel_frame, from_=0.02, to=0.3, increment=0.01,
+            textvariable=self.var_reel_press, width=8
         ).grid(row=row, column=1, sticky=tk.W, pady=2)
 
         ttk.Label(
             reel_frame,
-            text="死区：浮标在绿色区域中心附近\n此比例范围内时不操作，减少抖动",
+            text="遛鱼: 检测上半屏幕 green_zone 与 float_marker\n"
+                 "若 green_zone 在左 → 按 A  |  若 green_zone 在右 → 按 D\n"
+                 "保持 float_marker 重叠于 green_zone 上方",
             foreground="gray",
         ).grid(row=row + 1, column=0, columnspan=2, sticky=tk.W, pady=5)
 
@@ -364,9 +347,7 @@ class FishingBotGUI:
         config.max_cycles = self.var_max_cycles.get()
         config.bait_low_threshold = self.var_bait_threshold.get()
         config.button_press_duration = self.var_press_duration.get()
-        config.reel_press_min = self.var_reel_min.get()
-        config.reel_press_max = self.var_reel_max.get()
-        config.reel_dead_zone_ratio = self.var_dead_zone.get()
+        config.reel_press_duration = self.var_reel_press.get()
         config.use_window_capture = self.var_use_window.get()
         config.target_process = self.var_process_name.get()
 
@@ -468,7 +449,7 @@ class FishingBotGUI:
             "cv2": "opencv-python",
             "numpy": "numpy",
             "mss": "mss",
-            "vgamepad": "vgamepad",
+            "pynput": "pynput",
             "PIL": "Pillow",
         }
         for mod, pkg in modules.items():
@@ -478,19 +459,7 @@ class FishingBotGUI:
             except ImportError:
                 lines.append(f"  {pkg:<15}: ❌ 未安装 (pip install {pkg})")
 
-        # 3. pywin32 / psutil
-        for mod, pkg in [("win32gui", "pywin32"), ("psutil", "psutil")]:
-            try:
-                __import__(mod)
-                lines.append(f"  {pkg:<15}: ✅ 已安装")
-            except ImportError:
-                lines.append(f"  {pkg:<15}: ⚠️ 未安装（窗口捕获需要）")
-
-        # 4. ViGEmBus 驱动
-        driver_ok = self._check_vigembus()
-        lines.append(f"  ViGEmBus 驱动  : {'✅ 已安装' if driver_ok else '❌ 未安装（虚拟手柄需要）'}")
-
-        # 5. HTGame.exe
+        # 3. HTGame.exe
         try:
             from src.window_capture import WindowCapture
             wins = WindowCapture.list_game_windows("HTGame.exe")
@@ -504,44 +473,10 @@ class FishingBotGUI:
             lines.append(f"  HTGame.exe      : ⚠️ 无法检测（pywin32 未安装）")
 
         lines.append("")
-        if not driver_ok:
-            lines.append("  ⚠️ 请运行 setup.bat 或手动安装 ViGEmBus 驱动:")
-            lines.append("     https://github.com/nefarius/ViGEmBus/releases")
+        lines.append("  键鼠模式: 使用 pynput 模拟 F/A/D/E + 鼠标点击")
 
         self.env_text.insert("1.0", "\n".join(lines))
         self.env_text.config(state=tk.DISABLED)
-
-    @staticmethod
-    def _check_vigembus() -> bool:
-        """检查 ViGEmBus 驱动是否已安装"""
-        import subprocess
-
-        # 方式1: 检查驱动文件
-        import os
-        if os.path.exists(r"C:\Windows\System32\drivers\ViGEmBus.sys"):
-            return True
-
-        # 方式2: 尝试通过 vgamepad 检测
-        try:
-            import vgamepad as vg
-            g = vg.VX360Gamepad()
-            g.update()
-            return True
-        except Exception:
-            pass
-
-        # 方式3: 检查注册表
-        try:
-            result = subprocess.run(
-                ["reg", "query", r"HKLM\SYSTEM\CurrentControlSet\Services\ViGEmBus"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if result.returncode == 0:
-                return True
-        except Exception:
-            pass
-
-        return False
 
     def _append_log(self, msg: str):
         """追加日志（线程安全）"""

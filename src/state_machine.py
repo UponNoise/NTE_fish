@@ -2,18 +2,18 @@
 钓鱼状态机 - 管理钓鱼自动化的全部状态流转
 
 状态说明:
-    IDLE          - 空闲，未启动
-    CASTING       - 按 A 抛竿
-    WAITING_BITE  - 等待鱼上钩（检测屏幕）
-    HOOKING       - 按 A 起勾
-    REELING       - LT/RT 遛鱼（进度条平衡）
-    CHECKING_BAIT - 检查鱼饵是否充足
-    SELLING       - 按 X 进入渔获商店出售
-    BUYING_BAIT   - 按菜单键进入商店购买鱼饵
+    CHECK_READY   - 检测右下角 E/F UI 是否存在，判断是否在钓鱼准备界面
+    INIT_SETUP    - 首次准备：E 换鱼饵 → 点击 bait → 点击 exchange
+    CAST          - 按 F 抛竿
+    WAIT_BITE     - 等待鱼上钩（检测 bite_indicator）
+    HOOK          - 按 F 起勾
+    REELING       - A/D 遛鱼（保持 float_marker 重叠 green_zone）
+    COLLECT       - 点击收杆结果 (catch_success / catch_fail)
+    CHECK_BAIT    - 检查鱼饵是否不足 (bait_low_warning)
+    SELL_BUY      - 出售渔获 + 购买鱼饵（暂留空）
     STOPPED       - 已停止
 """
 
-import time
 import threading
 from enum import Enum, auto
 from typing import Optional, Callable
@@ -22,14 +22,15 @@ from config import config
 
 
 class FishState(Enum):
-    IDLE = auto()
-    CASTING = auto()
-    WAITING_BITE = auto()
-    HOOKING = auto()
+    CHECK_READY = auto()
+    INIT_SETUP = auto()
+    CAST = auto()
+    WAIT_BITE = auto()
+    HOOK = auto()
     REELING = auto()
-    CHECKING_BAIT = auto()
-    SELLING = auto()
-    BUYING_BAIT = auto()
+    COLLECT = auto()
+    CHECK_BAIT = auto()
+    SELL_BUY = auto()
     STOPPED = auto()
 
 
@@ -37,18 +38,19 @@ class FishingStateMachine:
     """钓鱼自动化状态机"""
 
     def __init__(self):
-        self._state = FishState.IDLE
+        self._state = FishState.CHECK_READY
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._cycle_count: int = 0
         self._total_fish: int = 0
+        self._initial_setup_done: bool = False
 
         # 回调
         self._on_state_change: Optional[Callable[[FishState, FishState], None]] = None
         self._on_log: Optional[Callable[[str], None]] = None
         self._on_fish_caught: Optional[Callable[[int], None]] = None
 
-    # ---- 属性 ----
+    # ── 属性 ──
 
     @property
     def state(self) -> FishState:
@@ -65,7 +67,7 @@ class FishingStateMachine:
 
     @property
     def is_running(self) -> bool:
-        return self.state not in (FishState.IDLE, FishState.STOPPED)
+        return self.state not in (FishState.CHECK_READY, FishState.STOPPED)
 
     @property
     def cycle_count(self) -> int:
@@ -75,134 +77,118 @@ class FishingStateMachine:
     def total_fish(self) -> int:
         return self._total_fish
 
-    # ---- 回调设置 ----
+    # ── 回调 ──
 
-    def set_on_state_change(self, cb: Callable[[FishState, FishState], None]):
+    def set_on_state_change(self, cb):
         self._on_state_change = cb
 
-    def set_on_log(self, cb: Callable[[str], None]):
+    def set_on_log(self, cb):
         self._on_log = cb
 
-    def set_on_fish_caught(self, cb: Callable[[int], None]):
+    def set_on_fish_caught(self, cb):
         self._on_fish_caught = cb
 
-    # ---- 日志 ----
+    # ── 日志 ──
 
     def _log(self, msg: str):
         if self._on_log:
             self._on_log(msg)
 
+    # ── 控制 ──
+
     def stop(self):
-        """请求停止"""
         self._stop_event.set()
 
     def reset(self):
-        """重置状态机"""
         self._stop_event.clear()
         self._cycle_count = 0
         self._total_fish = 0
-        self.state = FishState.IDLE
+        self._initial_setup_done = False
+        self.state = FishState.CHECK_READY
 
     def should_stop(self) -> bool:
-        """检查是否应停止"""
         if self._stop_event.is_set():
             return True
         if config.max_cycles > 0 and self._cycle_count >= config.max_cycles:
             return True
         return False
 
-    # ---- 状态转换逻辑 ----
+    # ── 状态转换 ──
 
-    def next_state(self, recognizer_result: dict) -> FishState:
+    def next_state(self, recog: dict) -> FishState:
         """
-        根据当前状态和图像识别结果决定下一个状态。
-        由外部（fishing_bot）调用。
+        根据当前状态和识别结果决定下一状态。
 
-        Args:
-            recognizer_result: {
-                "can_cast": bool,       # 检测到可抛竿状态
-                "fish_bite": bool,      # 检测到鱼上钩
-                "is_reeling": bool,     # 检测到遛鱼界面
-                "bait_low": bool,       # 鱼饵不足
-                "in_shop": bool,        # 在商店界面
-                "in_sell": bool,        # 在出售界面
-                "reel_done": bool,      # 遛鱼完成（鱼已上钩）
-            }
+        recog 字典:
+            has_ef_ui       : 右下角检测到 E/F 按键提示
+            has_exchange_bait: 检测到换鱼饵界面
+            has_bite        : 检测到鱼上钩
+            is_reeling      : 检测到遛鱼界面 (green_zone + float_marker)
+            reel_result     : "success" / "fail" / None
+            bait_low        : 鱼饵不足警告
         """
         current = self.state
 
         if self.should_stop():
             return FishState.STOPPED
 
-        if current == FishState.IDLE:
-            return FishState.CASTING
+        # CHECK_READY → 有 E/F UI 则进入 INIT_SETUP，否则保持（外部超时中断）
+        if current == FishState.CHECK_READY:
+            if recog.get("has_ef_ui"):
+                return FishState.INIT_SETUP if not self._initial_setup_done else FishState.CAST
+            return FishState.CHECK_READY
 
-        elif current == FishState.CASTING:
-            # 抛竿后等待动画，然后进入等待上钩
-            return FishState.WAITING_BITE
+        # INIT_SETUP → 完成换饵后 → CAST
+        elif current == FishState.INIT_SETUP:
+            if recog.get("setup_complete"):
+                self._initial_setup_done = True
+                return FishState.CAST
+            return FishState.INIT_SETUP
 
-        elif current == FishState.WAITING_BITE:
-            if recognizer_result.get("fish_bite"):
-                return FishState.HOOKING
-            # 继续等待...（外部处理超时）
-            return FishState.WAITING_BITE
+        # CAST → 抛竿后进入等待
+        elif current == FishState.CAST:
+            return FishState.WAIT_BITE
 
-        elif current == FishState.HOOKING:
-            if recognizer_result.get("is_reeling"):
+        # WAIT_BITE → 有鱼上钩 → HOOK，否则继续等待
+        elif current == FishState.WAIT_BITE:
+            if recog.get("has_bite"):
+                return FishState.HOOK
+            return FishState.WAIT_BITE
+
+        # HOOK → 出现遛鱼界面 → REELING
+        elif current == FishState.HOOK:
+            if recog.get("is_reeling"):
                 return FishState.REELING
-            # 起勾后短暂等待，再判断
-            return FishState.HOOKING
+            return FishState.HOOK
 
+        # REELING → 收杆结果 → COLLECT
         elif current == FishState.REELING:
-            if recognizer_result.get("reel_done"):
-                self._total_fish += 1
-                if self._on_fish_caught:
-                    self._on_fish_caught(self._total_fish)
+            result = recog.get("reel_result")
+            if result in ("success", "fail"):
+                if result == "success":
+                    self._total_fish += 1
+                    if self._on_fish_caught:
+                        self._on_fish_caught(self._total_fish)
                 self._cycle_count += 1
-                return FishState.CHECKING_BAIT
+                return FishState.COLLECT
             return FishState.REELING
 
-        elif current == FishState.CHECKING_BAIT:
-            if recognizer_result.get("bait_low"):
-                return FishState.SELLING
-            else:
-                return FishState.CASTING
+        # COLLECT → 点击后检查鱼饵
+        elif current == FishState.COLLECT:
+            return FishState.CHECK_BAIT
 
-        elif current == FishState.SELLING:
-            if recognizer_result.get("in_sell"):
-                # 还在出售界面，继续等待出售完成
-                return FishState.SELLING
-            else:
-                # 出售完成，去买鱼饵
-                return FishState.BUYING_BAIT
+        # CHECK_BAIT → 鱼饵不足 → SELL_BUY，否则 → CAST
+        elif current == FishState.CHECK_BAIT:
+            if recog.get("bait_low"):
+                return FishState.SELL_BUY
+            return FishState.CAST
 
-        elif current == FishState.BUYING_BAIT:
-            if recognizer_result.get("in_shop"):
-                return FishState.BUYING_BAIT
-            else:
-                # 购买完成，继续钓鱼
-                return FishState.CASTING
+        # SELL_BUY → 暂留空，直接回 CAST
+        elif current == FishState.SELL_BUY:
+            return FishState.CAST
 
         elif current == FishState.STOPPED:
             return FishState.STOPPED
 
         return current
 
-    def get_state_actions(self, state: FishState) -> list[str]:
-        """
-        返回该状态下需要执行的操作序列。
-
-        Returns:
-            操作指令列表，如 ["A", "LT", "RT", "X", "B", "START", "WAIT_2s"]
-        """
-        actions = {
-            FishState.IDLE: [],
-            FishState.CASTING: ["A"],
-            FishState.WAITING_BITE: [],  # 仅等待，无操作
-            FishState.HOOKING: ["A"],
-            FishState.REELING: [],       # 图像识别驱动 LT/RT
-            FishState.CHECKING_BAIT: [],  # 仅检测，无操作
-            FishState.SELLING: ["X"],     # 进入出售
-            FishState.BUYING_BAIT: ["START"],  # 菜单键进入商店
-        }
-        return actions.get(state, [])

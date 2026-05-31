@@ -1,140 +1,63 @@
 """
-手柄输入模拟模块 - 使用 vgamepad 模拟 Xbox 360 手柄
+键鼠输入模拟模块 - 使用 pynput 模拟键盘按键和鼠标点击
 """
 
 import time
-import threading
-from enum import Enum
-from typing import Optional
+from typing import Optional, Tuple
 
-import vgamepad as vg
+from pynput.keyboard import Key, Controller as KeyboardController
+from pynput.mouse import Button, Controller as MouseController
 
 from config import config
 
 
-class GamepadButton(Enum):
-    """Xbox 手柄按键映射"""
-    A = "A"
-    B = "B"
-    X = "X"
-    Y = "Y"
-    LB = "LB"
-    RB = "RB"
-    LT = "LT"
-    RT = "RT"
-    START = "START"      # 菜单键
-    BACK = "BACK"        # 视图键
-    DPAD_UP = "DPAD_UP"
-    DPAD_DOWN = "DPAD_DOWN"
-    DPAD_LEFT = "DPAD_LEFT"
-    DPAD_RIGHT = "DPAD_RIGHT"
-
-
 class InputSimulator:
-    """虚拟 Xbox 360 手柄输入模拟器"""
+    """键盘 + 鼠标输入模拟器"""
 
     def __init__(self):
-        self._gamepad = vg.VX360Gamepad()
+        self._keyboard = KeyboardController()
+        self._mouse = MouseController()
 
-    def press_button(
-        self,
-        button: GamepadButton,
-        duration: Optional[float] = None,
-    ) -> None:
-        """
-        按下并释放一个按键。
+    # ── 键盘 ──
 
-        Args:
-            button: 要按下的按键
-            duration: 按下持续时间（秒），默认使用配置值
-        """
+    def press_key(self, key: str, duration: Optional[float] = None) -> None:
+        """按下并释放按键。key 如 'F', 'A', 'D', 'E'"""
         duration = duration or config.button_press_duration
-        self._set_button(button, True)
-        self._gamepad.update()
+        self._keyboard.press(key)
         time.sleep(duration)
-        self._set_button(button, False)
-        self._gamepad.update()
+        self._keyboard.release(key)
 
-    def hold_button(self, button: GamepadButton) -> None:
-        """按住按键（不释放）"""
-        self._set_button(button, True)
-        self._gamepad.update()
+    def tap(self, key: str) -> None:
+        """快速点按"""
+        self.press_key(key)
 
-    def release_button(self, button: GamepadButton) -> None:
-        """释放按键"""
-        self._set_button(button, False)
-        self._gamepad.update()
+    # ── 鼠标 ──
 
-    def press_trigger(
-        self,
-        trigger: GamepadButton,
-        value: float = 1.0,
-        duration: Optional[float] = None,
-    ) -> None:
-        """
-        按下扳机键（LT/RT）。
+    def move_to(self, x: int, y: int) -> None:
+        """移动鼠标到屏幕绝对坐标"""
+        self._mouse.position = (x, y)
+        time.sleep(0.01)
 
-        Args:
-            trigger: LT 或 RT
-            value: 按下力度 0.0 ~ 1.0
-            duration: 持续时间（秒）
-        """
-        if trigger not in (GamepadButton.LT, GamepadButton.RT):
-            raise ValueError("扳机键仅支持 LT 或 RT")
+    def click(self, x: Optional[int] = None, y: Optional[int] = None) -> None:
+        """鼠标左键点击。可先移动到 (x,y) 再点击"""
+        if x is not None and y is not None:
+            self.move_to(x, y)
+        self._mouse.click(Button.left)
+        time.sleep(0.05)
 
-        duration = duration or config.button_press_duration
-        self._set_trigger(trigger, value)
-        self._gamepad.update()
-        time.sleep(duration)
-        self._set_trigger(trigger, 0.0)
-        self._gamepad.update()
+    def click_at(self, position: Tuple[int, int]) -> None:
+        """在指定位置点击"""
+        self.click(position[0], position[1])
 
-    def tap_reel(self, direction: str, duration: Optional[float] = None) -> None:
-        """
-        轻触遛鱼方向键（用于微调浮标）。
-
-        Args:
-            direction: "LT" 或 "RT"
-            duration: 按键时长，默认使用 reel_press_min
-        """
-        duration = duration or config.reel_press_min
-        btn = GamepadButton.LT if direction.upper() == "LT" else GamepadButton.RT
-        self.press_trigger(btn, value=1.0, duration=duration)
+    # ── 复位 ──
 
     def reset(self) -> None:
-        """释放所有按键和扳机"""
-        self._gamepad.reset()
-        self._gamepad.update()
+        """释放所有按键（pynput 自动处理）"""
+        pass
 
-    def _set_button(self, button: GamepadButton, pressed: bool) -> None:
-        """内部方法：设置按键状态"""
-        mapping = {
-            GamepadButton.A: vg.XUSB_BUTTON.XUSB_GAMEPAD_A,
-            GamepadButton.B: vg.XUSB_BUTTON.XUSB_GAMEPAD_B,
-            GamepadButton.X: vg.XUSB_BUTTON.XUSB_GAMEPAD_X,
-            GamepadButton.Y: vg.XUSB_BUTTON.XUSB_GAMEPAD_Y,
-            GamepadButton.LB: vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER,
-            GamepadButton.RB: vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER,
-            GamepadButton.START: vg.XUSB_BUTTON.XUSB_GAMEPAD_START,
-            GamepadButton.BACK: vg.XUSB_BUTTON.XUSB_GAMEPAD_BACK,
-            GamepadButton.DPAD_UP: vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP,
-            GamepadButton.DPAD_DOWN: vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_DOWN,
-            GamepadButton.DPAD_LEFT: vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_LEFT,
-            GamepadButton.DPAD_RIGHT: vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_RIGHT,
-        }
-        if button in mapping:
-            if pressed:
-                self._gamepad.press_button(button=mapping[button])
-            else:
-                self._gamepad.release_button(button=mapping[button])
-
-    def _set_trigger(self, trigger: GamepadButton, value: float) -> None:
-        """内部方法：设置扳机值"""
-        val = int(max(0.0, min(1.0, value)) * 255)
-        if trigger == GamepadButton.LT:
-            self._gamepad.left_trigger_float(value_float=value)
-        elif trigger == GamepadButton.RT:
-            self._gamepad.right_trigger_float(value_float=value)
+    def idle(self, seconds: float = 0.1) -> None:
+        """短暂空闲等待"""
+        time.sleep(seconds)
 
     def __del__(self):
         self.reset()
