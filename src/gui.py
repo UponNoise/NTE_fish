@@ -178,6 +178,19 @@ class FishingBotGUI:
         ).grid(row=row, column=1, sticky=tk.W, pady=2)
 
         row += 1
+        ttk.Label(basic_frame, text="输入方式:").grid(
+            row=row, column=0, sticky=tk.W, pady=2
+        )
+        self.var_input_backend = tk.StringVar(value=config.input_backend)
+        ttk.Combobox(
+            basic_frame,
+            values=("scan_code", "vk", "keybd_event"),
+            textvariable=self.var_input_backend,
+            width=14,
+            state="readonly",
+        ).grid(row=row, column=1, sticky=tk.W, pady=2)
+
+        row += 1
         ttk.Button(basic_frame, text="应用设置", command=self._apply_settings).grid(
             row=row, column=0, columnspan=2, pady=10
         )
@@ -358,6 +371,7 @@ class FishingBotGUI:
         config.max_cycles = self.var_max_cycles.get()
         config.bait_low_threshold = self.var_bait_threshold.get()
         config.button_press_duration = self.var_press_duration.get()
+        config.input_backend = self.var_input_backend.get()
         config.reel_press_duration = self.var_reel_press.get()
         config.use_window_capture = self.var_use_window.get()
         config.target_process = self.var_process_name.get()
@@ -493,7 +507,7 @@ class FishingBotGUI:
             lines.append(f"  HTGame.exe      : ⚠️ 无法检测（pywin32 未安装）")
 
         lines.append("")
-        lines.append("  键鼠模式: 使用 Windows SendInput 扫描码模拟 F/A/D/E + 鼠标点击")
+        lines.append(f"  键鼠模式: {config.input_backend}，输入前自动聚焦游戏窗口")
 
         self.env_text.insert("1.0", "\n".join(lines))
         self.env_text.config(state=tk.DISABLED)

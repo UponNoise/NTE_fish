@@ -3,7 +3,7 @@
 import ctypes
 import time
 from ctypes import wintypes
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 from config import config
 
@@ -16,6 +16,7 @@ KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_SCANCODE = 0x0008
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
+MAPVK_VK_TO_VSC = 0
 
 
 class KEYBDINPUT(ctypes.Structure):
@@ -69,6 +70,13 @@ SCAN_CODES = {
     "F": 0x21,
 }
 
+VK_CODES = {
+    "A": 0x41,
+    "D": 0x44,
+    "E": 0x45,
+    "F": 0x46,
+}
+
 
 class InputSimulator:
     """键盘 + 鼠标输入模拟器"""
@@ -79,18 +87,42 @@ class InputSimulator:
         self._user32.SendInput.restype = wintypes.UINT
         self._user32.SetCursorPos.argtypes = (ctypes.c_int, ctypes.c_int)
         self._user32.SetCursorPos.restype = wintypes.BOOL
-        self._pressed_scan_codes: set[int] = set()
+        self._user32.MapVirtualKeyW.argtypes = (wintypes.UINT, wintypes.UINT)
+        self._user32.MapVirtualKeyW.restype = wintypes.UINT
+        self._user32.keybd_event.argtypes = (wintypes.BYTE, wintypes.BYTE, wintypes.DWORD, ULONG_PTR)
+        self._user32.keybd_event.restype = None
+        self._pressed_keys: set[str] = set()
+        self._focus_callback: Optional[Callable[[], bool]] = None
+
+    def set_focus_callback(self, callback: Callable[[], bool]) -> None:
+        """设置输入前的窗口聚焦回调。"""
+        self._focus_callback = callback
 
     # ── 键盘 ──
 
-    def _send_keyboard(self, scan_code: int, key_up: bool = False) -> None:
-        flags = KEYEVENTF_SCANCODE | (KEYEVENTF_KEYUP if key_up else 0)
-        data = INPUTUNION(ki=KEYBDINPUT(0, scan_code, flags, 0, 0))
+    def _focus_before_input(self) -> None:
+        if config.auto_focus_input and self._focus_callback:
+            self._focus_callback()
+            time.sleep(0.03)
+
+    def _send_input_keyboard(self, vk_code: int, scan_code: int, key_up: bool, use_scan_code: bool) -> None:
+        flags = KEYEVENTF_KEYUP if key_up else 0
+        w_vk = vk_code
+        w_scan = scan_code
+        if use_scan_code:
+            flags |= KEYEVENTF_SCANCODE
+            w_vk = 0
+
+        data = INPUTUNION(ki=KEYBDINPUT(w_vk, w_scan, flags, 0, 0))
         event = INPUT(INPUT_KEYBOARD, data)
         sent = self._user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(INPUT))
         if sent != 1:
             error = ctypes.get_last_error()
-            raise OSError(error, f"SendInput keyboard failed for scan code {scan_code:#x}")
+            raise OSError(error, f"SendInput keyboard failed for key {vk_code:#x}/{scan_code:#x}")
+
+    def _send_keybd_event(self, vk_code: int, scan_code: int, key_up: bool) -> None:
+        flags = KEYEVENTF_KEYUP if key_up else 0
+        self._user32.keybd_event(vk_code, scan_code, flags, 0)
 
     def _scan_code_for(self, key: str) -> int:
         normalized = key.upper()
@@ -98,17 +130,37 @@ class InputSimulator:
             raise ValueError(f"不支持的按键: {key!r}，当前支持 {', '.join(sorted(SCAN_CODES))}")
         return SCAN_CODES[normalized]
 
+    def _vk_code_for(self, key: str) -> int:
+        normalized = key.upper()
+        if normalized not in VK_CODES:
+            raise ValueError(f"不支持的按键: {key!r}，当前支持 {', '.join(sorted(VK_CODES))}")
+        return VK_CODES[normalized]
+
+    def _send_key(self, key: str, key_up: bool = False) -> None:
+        vk_code = self._vk_code_for(key)
+        scan_code = self._scan_code_for(key)
+        backend = config.input_backend.lower()
+
+        if backend == "vk":
+            mapped_scan = int(self._user32.MapVirtualKeyW(vk_code, MAPVK_VK_TO_VSC)) or scan_code
+            self._send_input_keyboard(vk_code, mapped_scan, key_up, use_scan_code=False)
+        elif backend == "keybd_event":
+            self._send_keybd_event(vk_code, scan_code, key_up)
+        else:
+            self._send_input_keyboard(vk_code, scan_code, key_up, use_scan_code=True)
+
     def key_down(self, key: str) -> None:
         """按下按键。key 如 'F', 'A', 'D', 'E'"""
-        scan_code = self._scan_code_for(key)
-        self._send_keyboard(scan_code)
-        self._pressed_scan_codes.add(scan_code)
+        normalized = key.upper()
+        self._focus_before_input()
+        self._send_key(normalized)
+        self._pressed_keys.add(normalized)
 
     def key_up(self, key: str) -> None:
         """释放按键。key 如 'F', 'A', 'D', 'E'"""
-        scan_code = self._scan_code_for(key)
-        self._send_keyboard(scan_code, key_up=True)
-        self._pressed_scan_codes.discard(scan_code)
+        normalized = key.upper()
+        self._send_key(normalized, key_up=True)
+        self._pressed_keys.discard(normalized)
 
     def press_key(self, key: str, duration: Optional[float] = None) -> None:
         """按下并释放按键。key 如 'F', 'A', 'D', 'E'"""
@@ -127,6 +179,7 @@ class InputSimulator:
 
     def move_to(self, x: int, y: int) -> None:
         """移动鼠标到屏幕绝对坐标"""
+        self._focus_before_input()
         if not self._user32.SetCursorPos(int(x), int(y)):
             error = ctypes.get_last_error()
             raise OSError(error, f"SetCursorPos failed at ({x}, {y})")
@@ -157,11 +210,11 @@ class InputSimulator:
 
     def reset(self) -> None:
         """释放仍处于按下状态的按键。"""
-        for scan_code in list(self._pressed_scan_codes):
+        for key in list(self._pressed_keys):
             try:
-                self._send_keyboard(scan_code, key_up=True)
+                self._send_key(key, key_up=True)
             finally:
-                self._pressed_scan_codes.discard(scan_code)
+                self._pressed_keys.discard(key)
 
     def idle(self, seconds: float = 0.1) -> None:
         """短暂空闲等待"""

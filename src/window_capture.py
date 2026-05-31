@@ -198,6 +198,11 @@ class WindowCapture:
         region = self.get_capture_region()
         if region is None:
             return None
+        return self.capture_region(sct, region)
+
+    @staticmethod
+    def capture_region(sct, region: Tuple[int, int, int, int]) -> Optional[np.ndarray]:
+        """按 mss 区域截图，返回 BGR numpy 数组。"""
         monitor = {
             "left": region[0],
             "top": region[1],

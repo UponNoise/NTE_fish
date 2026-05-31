@@ -35,7 +35,7 @@ class BotConfig:
 
     # ---------- 图像识别 ----------
     # 模板匹配阈值 (0.0 ~ 1.0)，越高越严格
-    match_threshold: float = 0.8
+    match_threshold: float = 0.72
     # 资源目录路径
     assets_dir: str = "assets"
 
@@ -44,6 +44,10 @@ class BotConfig:
     button_press_duration: float = 0.15
     # 按键间隔（秒）
     button_interval: float = 0.3
+    # 输入方式：scan_code / vk / keybd_event
+    input_backend: str = "scan_code"
+    # 每次发键前尝试聚焦游戏窗口
+    auto_focus_input: bool = True
 
     # ---------- 状态机超时 ----------
     # 等待鱼上钩超时（秒），超时后重新抛竿

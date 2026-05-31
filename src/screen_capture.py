@@ -38,6 +38,7 @@ class ScreenCapture:
         self.use_window = use_window
         self.process_name = process_name
         self._window_capture: Optional[WindowCapture] = None
+        self._last_origin: Tuple[int, int] = (0, 0)
 
         if use_window and HAS_WINDOW_CAPTURE:
             self._window_capture = WindowCapture(process_name)
@@ -46,12 +47,20 @@ class ScreenCapture:
         """截取当前屏幕，返回 BGR 格式的 numpy 数组 (H, W, 3)"""
         # 优先使用窗口捕获
         if self.use_window and self._window_capture is not None:
+            region = self._window_capture.get_capture_region()
+            if region is not None:
+                self._last_origin = (region[0], region[1])
+                img = self._window_capture.capture_region(self._sct, region)
+                if img is not None:
+                    return img
+
             img = self._window_capture.capture_window(self._sct)
             if img is not None:
                 return img
 
         # 回退到手动区域或全屏
         if self.region:
+            self._last_origin = (self.region[0], self.region[1])
             monitor = {
                 "left": self.region[0],
                 "top": self.region[1],
@@ -60,10 +69,15 @@ class ScreenCapture:
             }
         else:
             monitor = self._sct.monitors[1]
+            self._last_origin = (monitor.get("left", 0), monitor.get("top", 0))
 
         sct_img = self._sct.grab(monitor)
         img = np.array(sct_img, dtype=np.uint8)
         return img[:, :, :3]
+
+    def to_screen_position(self, position: Tuple[int, int]) -> Tuple[int, int]:
+        """把截图内坐标转换成屏幕绝对坐标。"""
+        return (self._last_origin[0] + int(position[0]), self._last_origin[1] + int(position[1]))
 
     def capture_bgr(self) -> np.ndarray:
         """同 capture()，显式返回 BGR"""

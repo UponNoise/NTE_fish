@@ -144,15 +144,19 @@ class FishingStateMachine:
         elif current == FishState.CAST:
             return FishState.WAIT_BITE
 
-        # WAIT_BITE → 定时按 F ，检测到遛鱼界面后直接进入 REELING
+        # WAIT_BITE → 识别到上钩先按 F；若已进入遛鱼界面则直接 REELING
         elif current == FishState.WAIT_BITE:
             if recog.get("is_reeling"):
                 return FishState.REELING
+            if recog.get("has_bite"):
+                return FishState.HOOK
             return FishState.WAIT_BITE
 
-        # HOOK → 立即转入 REELING（F 已在 WAIT_BITE 中持续按下）
+        # HOOK → 等到遛鱼界面出现
         elif current == FishState.HOOK:
-            return FishState.REELING
+            if recog.get("is_reeling"):
+                return FishState.REELING
+            return FishState.HOOK
 
         # REELING → 收杆结果 → COLLECT
         elif current == FishState.REELING:

@@ -33,10 +33,12 @@ class FishingBot:
         )
         self.recognizer = ImageRecognizer()
         self.input = InputSimulator()
+        self.input.set_focus_callback(self.capture.focus_game_window)
         self.state_machine = FishingStateMachine()
 
         self._thread: Optional[threading.Thread] = None
         self._bite_start_time: float = 0.0
+        self._hook_start_time: float = 0.0
         self._last_f_press: float = 0.0      # 上次按 F 的时间戳
         self._reel_start_time: float = 0.0
 
@@ -62,6 +64,12 @@ class FishingBot:
 
     def _log(self, msg: str):
         self._on_bot_log(msg)
+
+    def _click_capture_position(self, position: tuple[int, int], label: str = "") -> None:
+        x, y = self.capture.to_screen_position(position)
+        self.input.click(x, y)
+        if label:
+            self._log(f"{label} ({x},{y})")
 
     # ── 窗口检测 ──
 
@@ -105,8 +113,8 @@ class FishingBot:
         while not self.state_machine.should_stop():
             try:
                 screenshot = self.capture.capture()
-                recog = self._recognize_scene(screenshot)
                 current = self.state_machine.state
+                recog = self._recognize_scene(screenshot, current)
                 next_state = self.state_machine.next_state(recog)
 
                 if next_state == FishState.STOPPED:
@@ -133,13 +141,29 @@ class FishingBot:
 
     # ── 场景识别 ──
 
-    def _recognize_scene(self, screenshot: np.ndarray) -> dict:
-        return {
-            "has_bite": self.recognizer.is_present(screenshot, "bite_indicator"),
-            "is_reeling": self.recognizer.is_present(screenshot, "green_zone"),
-            "reel_result": self._detect_reel_result(screenshot),
-            "bait_low": self.recognizer.is_present(screenshot, "bait_low_warning"),
-        }
+    def _recognize_scene(self, screenshot: np.ndarray, state: FishState) -> dict:
+        """按当前状态做最少量识别，避免每帧扫描全部模板。"""
+        recog: dict = {}
+
+        if state == FishState.WAIT_BITE:
+            reeling = self.recognizer.detect_reeling(screenshot)
+            recog["has_bite"] = self.recognizer.detect_bite(screenshot)
+            recog["is_reeling"] = reeling is not None
+            recog["reeling"] = reeling
+        elif state == FishState.HOOK:
+            reeling = self.recognizer.detect_reeling(screenshot)
+            recog["is_reeling"] = reeling is not None
+            recog["reeling"] = reeling
+        elif state == FishState.REELING:
+            reeling = self.recognizer.detect_reeling(screenshot)
+            recog["is_reeling"] = reeling is not None
+            recog["reeling"] = reeling
+            if reeling is None:
+                recog["reel_result"] = self._detect_reel_result(screenshot)
+        elif state == FishState.CHECK_BAIT:
+            recog["bait_low"] = self.recognizer.detect_bait_low(screenshot)
+
+        return recog
 
     def _detect_reel_result(self, screenshot: np.ndarray) -> Optional[str]:
         r = self.recognizer.detect_catch_result(screenshot)
@@ -163,10 +187,11 @@ class FishingBot:
 
         elif state == FishState.WAIT_BITE:
             self._bite_start_time = time.time()
-            self._last_f_press = 0.0
+            self._last_f_press = time.time()
             self._log(f"开始定时按 F（间隔 {config.bite_f_interval}s）...")
 
         elif state == FishState.HOOK:
+            self._hook_start_time = time.time()
             time.sleep(config.hook_animation_wait)
             self.input.tap("F")
             self._log("按 F 起勾")
@@ -182,7 +207,7 @@ class FishingBot:
             self._log("检查鱼饵...")
 
         elif state == FishState.SELL_BUY:
-            self._log("[SELL_BUY] 暂留空，返回钓鱼循环")
+            self._do_sell_buy()
 
     # ── 持续动作 ──
 
@@ -194,7 +219,7 @@ class FishingBot:
                 self.input.tap("F")
                 self._last_f_press = now
         elif state == FishState.REELING:
-            info = self.recognizer.detect_reeling(screenshot)
+            info = recog.get("reeling") or self.recognizer.detect_reeling(screenshot)
             if info and info.get("action") not in (None, "NONE"):
                 self.input.press_key(info["action"], config.reel_press_duration)
 
@@ -212,6 +237,12 @@ class FishingBot:
                 self.state_machine._cycle_count += 1
                 self._execute_entry(FishState.CAST, self.capture.capture(), {})
                 self.state_machine.state = FishState.CAST
+        elif state == FishState.HOOK:
+            if time.time() - self._hook_start_time > 5.0:
+                self._log("起勾后未进入遛鱼，回到等待")
+                self._bite_start_time = time.time()
+                self._last_f_press = time.time()
+                self.state_machine.state = FishState.WAIT_BITE
 
     # ── 子流程 ──
 
@@ -229,32 +260,29 @@ class FishingBot:
             # 成功: 同时检测到 bait 和 exchange
             if ui.get("bait") and ui.get("exchange"):
                 self._log(f"检测到换饵界面 bait=({ui['bait'][0]},{ui['bait'][1]}) exchange=({ui['exchange'][0]},{ui['exchange'][1]})")
-                self.input.click_at(ui["bait"])
-                self._log("点击鱼饵")
+                self._click_capture_position(ui["bait"], "点击鱼饵")
                 time.sleep(1.0)
-                self.input.click_at(ui["exchange"])
-                self._log("点击确认更换")
+                self._click_capture_position(ui["exchange"], "点击确认更换")
                 time.sleep(2.0)
                 return
 
             # 降级: 只检测到 exchange → 可能已在界面内，直接点击
             if ui.get("exchange"):
                 self._log(f"仅检测到 exchange，直接点击 ({ui['exchange'][0]},{ui['exchange'][1]})")
-                self.input.click_at(ui["exchange"])
+                self._click_capture_position(ui["exchange"], "点击确认更换")
                 time.sleep(1.5)
                 return
 
             # 降级: 只检测到 bait → 点击后等 exchange 出现
             if ui.get("bait"):
                 self._log(f"仅检测到 bait，点击 ({ui['bait'][0]},{ui['bait'][1]})")
-                self.input.click_at(ui["bait"])
+                self._click_capture_position(ui["bait"], "点击鱼饵")
                 time.sleep(1.0)
                 # 再试检测 exchange
                 ss2 = self.capture.capture()
                 ui2 = self.recognizer.detect_bait_exchange_ui(ss2)
                 if ui2.get("exchange"):
-                    self.input.click_at(ui2["exchange"])
-                    self._log("点击确认更换")
+                    self._click_capture_position(ui2["exchange"], "点击确认更换")
                     time.sleep(1.5)
                     return
 
@@ -267,9 +295,37 @@ class FishingBot:
         r = self.recognizer.detect_catch_result(screenshot)
         if r:
             _, cx, cy = r
-            self.input.click(cx, cy)
-            self._log(f"点击收杆结果 ({cx},{cy})")
+            self._click_capture_position((cx, cy), "点击收杆结果")
             time.sleep(1.0)
         else:
             self._log("[警告] 未找到收杆结果，跳过点击")
+
+    def _do_sell_buy(self):
+        """尝试处理出售/返回钓鱼相关界面。"""
+        self._log("尝试处理出售/购买界面...")
+
+        clicked_any = False
+        for _ in range(10):
+            ss = self.capture.capture()
+            ui = self.recognizer.detect_sell_buy_ui(ss)
+
+            for key, label in (
+                ("quick_submit", "点击快捷提交"),
+                ("sell_all", "点击一键出售"),
+                ("confirm", "点击确认"),
+                ("go_fishing", "点击前往钓鱼"),
+                ("close", "关闭弹窗"),
+            ):
+                position = ui.get(key)
+                if position:
+                    self._click_capture_position(position, label)
+                    clicked_any = True
+                    time.sleep(1.0)
+                    break
+            else:
+                time.sleep(0.4)
+                continue
+
+        if not clicked_any:
+            self._log("[提示] 未识别到出售/购买按钮，跳过该步骤")
 

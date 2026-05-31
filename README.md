@@ -5,11 +5,11 @@
 ## 功能
 
 - 🎣 启动后直接尝试换饵并抛竿（F键）→ 等待上钩 → 起勾（F键）→ 遛鱼（A/D键）→ 循环
-- 🛒 鱼饵不足时自动进入渔获商店出售 → 购买鱼饵 → 返回继续（暂留空）
+- 🛒 识别出售/确认/返回钓鱼相关按钮，尽量自动处理出售流程
 - 🔄 首次自动换饵：E键 → 识别 bait → 点击 exchange
 - 🖥️ GUI 图形界面，实时显示状态和日志
-- 🎯 基于 OpenCV 模板匹配的图像识别（阈值 0.8）
-- ⌨️ 键鼠模拟（Windows SendInput 扫描码）：F/A/D/E 键盘 + 鼠标点击
+- 🎯 基于 OpenCV 的多尺度模板匹配，支持中文素材文件名
+- ⌨️ 键鼠模拟：支持 scan_code / vk / keybd_event 三种 Windows 输入方式
 - 🪟 智能窗口捕获：自动定位 HTGame.exe 游戏窗口
 - 📐 分辨率约束：800×600 ~ 3840×2160
 - 🐳 Docker 支持：容器化环境便于验证和 CI/CD
@@ -54,6 +54,8 @@ pip install -r requirements.txt
 python main.py
 ```
 
+如果游戏以管理员身份运行，请优先使用 `run_admin.bat` 启动脚本。
+
 1. 启动游戏（HTGame.exe），站到可钓鱼的位置
 2. 运行脚本，GUI 启动后会自动检测游戏窗口
 3. 检查「窗口捕获」页面确认已找到游戏窗口
@@ -80,13 +82,11 @@ docker-compose up
 | 文件名 | 用途 | 说明 |
 |--------|------|------|
 | `bite_indicator` | 上钩指示 | 鱼上钩时的特效或提示 |
-| `progress_bar_bg` | 进度条背景 | 遛鱼界面顶部的进度条背景 |
 | `float_marker` | 浮标 | 进度条上左右移动的黄色浮标 |
 | `green_zone` | 绿色区域 | 进度条上需要保持浮标在其中的绿色区域 |
 | `catch_success` | 收杆成功 | 钓鱼成功后的提示 |
 | `bait_low_warning` | 鱼饵不足 | 鱼饵不足的警告提示 |
-| `shop_title` | 商店标题 | 商店界面的标题文字/图标 |
-| `sell_confirm` | 出售确认 | 出售渔获确认界面 |
+| `bait` / `exchange` | 换饵 | 鱼饵图标和更换按钮 |
 
 ## 项目结构
 
@@ -106,7 +106,7 @@ NTE_fish/
     ├── state_machine.py       # 状态机
     ├── screen_capture.py      # 屏幕捕获 (mss)
     ├── image_recognizer.py    # 图像识别 (OpenCV)
-    └── input_simulator.py     # 手柄模拟 (vgamepad)
+    └── input_simulator.py     # Windows 键鼠输入模拟
 ```
 
 ## 遛鱼机制
@@ -119,7 +119,8 @@ NTE_fish/
 ## 注意事项
 
 - 若游戏以管理员身份运行，脚本也需要以管理员身份运行，否则 Windows 会拦截模拟输入
-- 图像素材需要与你的游戏画面分辨率/UI缩放一致
+- 若 F/A/D/E 仍无效，在 GUI 中把「输入方式」从 `scan_code` 切到 `vk` 或 `keybd_event` 试一次
+- 图像素材建议与你的游戏画面分辨率/UI 缩放一致；程序会自动尝试多尺度匹配
 - 建议在窗口化或无边窗口模式下运行游戏，便于截屏
 - 首次使用请先在 GUI 中调整各项参数
 
