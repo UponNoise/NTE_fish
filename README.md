@@ -23,7 +23,7 @@
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/<your-username>/NTE_fish.git
+git clone https://github.com/UponNoise/NTE_fish.git
 cd NTE_fish
 
 # 2. 创建虚拟环境（推荐）
