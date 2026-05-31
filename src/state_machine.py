@@ -2,7 +2,7 @@
 钓鱼状态机 - 管理钓鱼自动化的全部状态流转
 
 状态说明:
-    CHECK_READY   - 检测右下角 E/F UI 是否存在，判断是否在钓鱼准备界面
+    START         - 启动入口，不依赖准备界面模板
     INIT_SETUP    - 首次准备：E 换鱼饵 → 点击 bait → 点击 exchange
     CAST          - 按 F 抛竿
     WAIT_BITE     - 等待鱼上钩（检测 bite_indicator）
@@ -22,7 +22,7 @@ from config import config
 
 
 class FishState(Enum):
-    CHECK_READY = auto()
+    START = auto()
     INIT_SETUP = auto()
     CAST = auto()
     WAIT_BITE = auto()
@@ -38,7 +38,7 @@ class FishingStateMachine:
     """钓鱼自动化状态机"""
 
     def __init__(self):
-        self._state = FishState.CHECK_READY
+        self._state = FishState.START
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._cycle_count: int = 0
@@ -67,7 +67,7 @@ class FishingStateMachine:
 
     @property
     def is_running(self) -> bool:
-        return self.state not in (FishState.CHECK_READY, FishState.STOPPED)
+        return self.state not in (FishState.START, FishState.STOPPED)
 
     @property
     def cycle_count(self) -> int:
@@ -104,7 +104,7 @@ class FishingStateMachine:
         self._cycle_count = 0
         self._total_fish = 0
         self._initial_setup_done = False
-        self.state = FishState.CHECK_READY
+        self.state = FishState.START
 
     def should_stop(self) -> bool:
         if self._stop_event.is_set():
@@ -120,7 +120,6 @@ class FishingStateMachine:
         根据当前状态和识别结果决定下一状态。
 
         recog 字典:
-            has_ef_ui       : 右下角检测到 E/F 按键提示
             has_exchange_bait: 检测到换鱼饵界面
             has_bite        : 检测到鱼上钩
             is_reeling      : 检测到遛鱼界面 (green_zone + float_marker)
@@ -132,34 +131,28 @@ class FishingStateMachine:
         if self.should_stop():
             return FishState.STOPPED
 
-        # CHECK_READY → 有 E/F UI 则进入 INIT_SETUP，否则保持（外部超时中断）
-        if current == FishState.CHECK_READY:
-            if recog.get("has_ef_ui"):
-                return FishState.INIT_SETUP if not self._initial_setup_done else FishState.CAST
-            return FishState.CHECK_READY
+        # START → 直接进入流程，不再依赖准备界面模板识别
+        if current == FishState.START:
+            return FishState.INIT_SETUP if not self._initial_setup_done else FishState.CAST
 
-        # INIT_SETUP → 完成换饵后 → CAST
+        # INIT_SETUP → 执行一次换饵尝试后 → CAST
         elif current == FishState.INIT_SETUP:
-            if recog.get("setup_complete"):
-                self._initial_setup_done = True
-                return FishState.CAST
-            return FishState.INIT_SETUP
+            self._initial_setup_done = True
+            return FishState.CAST
 
         # CAST → 抛竿后进入等待
         elif current == FishState.CAST:
             return FishState.WAIT_BITE
 
-        # WAIT_BITE → 有鱼上钩 → HOOK，否则继续等待
+        # WAIT_BITE → 定时按 F ，检测到遛鱼界面后直接进入 REELING
         elif current == FishState.WAIT_BITE:
-            if recog.get("has_bite"):
-                return FishState.HOOK
-            return FishState.WAIT_BITE
-
-        # HOOK → 出现遛鱼界面 → REELING
-        elif current == FishState.HOOK:
             if recog.get("is_reeling"):
                 return FishState.REELING
-            return FishState.HOOK
+            return FishState.WAIT_BITE
+
+        # HOOK → 立即转入 REELING（F 已在 WAIT_BITE 中持续按下）
+        elif current == FishState.HOOK:
+            return FishState.REELING
 
         # REELING → 收杆结果 → COLLECT
         elif current == FishState.REELING:

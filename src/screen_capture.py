@@ -95,6 +95,13 @@ class ScreenCapture:
             return None
         return wc.get_capture_region()
 
+    def focus_game_window(self) -> bool:
+        """尝试把目标游戏窗口置前。"""
+        if not HAS_WINDOW_CAPTURE:
+            return False
+        wc = self._window_capture or WindowCapture(self.process_name)
+        return wc.focus_window()
+
     @property
     def window_capture(self) -> Optional[WindowCapture]:
         return self._window_capture

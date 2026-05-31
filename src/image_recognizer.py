@@ -102,26 +102,6 @@ class ImageRecognizer:
 
     # ── 场景级检测 ──
 
-    def detect_bottom_right_ui(
-        self,
-        screenshot: np.ndarray,
-    ) -> Optional[str]:
-        """
-        检测右下角区域的按键提示 UI。
-
-        裁剪右下角 1/3 区域，依次匹配 'key_e' 和 'key_f' 模板。
-
-        Returns:
-            "E" / "F" / None
-        """
-        h, w = screenshot.shape[:2]
-        region = (w * 2 // 3, h * 2 // 3, w // 3, h // 3)
-
-        for key in ("key_e", "key_f"):
-            if self.match_in_region(screenshot, key, region, threshold=0.75) is not None:
-                return key[-1].upper()
-        return None
-
     def detect_reeling(
         self,
         screenshot: np.ndarray,

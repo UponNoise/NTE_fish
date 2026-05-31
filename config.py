@@ -4,7 +4,7 @@ NTE 异环钓鱼自动化脚本 - 配置文件
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Tuple
 
 
@@ -39,15 +39,13 @@ class BotConfig:
     # 资源目录路径
     assets_dir: str = "assets"
 
-    # ---------- 手柄模拟 ----------
+    # ---------- 键鼠模拟 ----------
     # 按键按下持续时间（秒），太短可能不被识别
     button_press_duration: float = 0.15
     # 按键间隔（秒）
     button_interval: float = 0.3
 
     # ---------- 状态机超时 ----------
-    # 检测钓鱼准备界面超时（秒），超时后中断
-    ready_timeout: float = 10.0
     # 等待鱼上钩超时（秒），超时后重新抛竿
     bite_timeout: float = 30.0
     # 遛鱼最大持续时间（秒）
@@ -60,6 +58,8 @@ class BotConfig:
     # ---------- 遛鱼控制 ----------
     # A/D 按键时长（秒）
     reel_press_duration: float = 0.06
+    # 等待上钩时 F 键间隔（秒）—— bite_indicator 闪现太快，改为定时按 F
+    bite_f_interval: float = 2.5
 
     # ---------- 渔获商店 ----------
     # 鱼饵不足阈值（数量）
@@ -86,6 +86,8 @@ class BotConfig:
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            valid_keys = {field.name for field in fields(cls)}
+            data = {key: value for key, value in data.items() if key in valid_keys}
             return cls(**data)
         return cls()
 

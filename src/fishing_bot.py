@@ -2,7 +2,7 @@
 钓鱼机器人主逻辑 - 串联屏幕捕获、图像识别、键鼠模拟和状态机
 
 流程:
-  CHECK_READY → INIT_SETUP → CAST → WAIT_BITE → HOOK → REELING → COLLECT → CHECK_BAIT
+  START → INIT_SETUP → CAST → WAIT_BITE → HOOK → REELING → COLLECT → CHECK_BAIT
        ↑                                                                     ↓
        └──────────────────────────────← (bait OK) ←──────────────────────────┘
                                               ↓ (bait low)
@@ -37,8 +37,8 @@ class FishingBot:
 
         self._thread: Optional[threading.Thread] = None
         self._bite_start_time: float = 0.0
+        self._last_f_press: float = 0.0      # 上次按 F 的时间戳
         self._reel_start_time: float = 0.0
-        self._check_ready_timeout: float = 0.0  # CHECK_READY 阶段超时用
 
         # 回调
         self.state_machine.set_on_state_change(self._on_state_changed)
@@ -81,6 +81,11 @@ class FishingBot:
         self._log("=" * 50)
         self._log("钓鱼机器人启动（键鼠模式）")
         self._log("=" * 50)
+        if config.use_window_capture:
+            if self.capture.focus_game_window():
+                self._log("已切换到游戏窗口")
+            else:
+                self._log("[警告] 无法自动切到游戏窗口，请手动点一下游戏窗口")
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
 
@@ -94,8 +99,8 @@ class FishingBot:
     # ── 主循环 ──
 
     def _run_loop(self):
-        self.state_machine.state = FishState.CHECK_READY
-        self._check_ready_timeout = time.time()
+        self.state_machine.state = FishState.START
+        self._log("跳过准备界面识别，直接开始钓鱼流程")
 
         while not self.state_machine.should_stop():
             try:
@@ -111,8 +116,9 @@ class FishingBot:
                     self._execute_entry(next_state, screenshot, recog)
                     self.state_machine.state = next_state
 
-                self._execute_continuous(current, screenshot, recog)
-                self._check_timeouts(current)
+                active_state = self.state_machine.state
+                self._execute_continuous(active_state, screenshot, recog)
+                self._check_timeouts(active_state)
                 time.sleep(config.screen_capture_interval)
 
             except Exception as e:
@@ -129,12 +135,10 @@ class FishingBot:
 
     def _recognize_scene(self, screenshot: np.ndarray) -> dict:
         return {
-            "has_ef_ui": self.recognizer.detect_bottom_right_ui(screenshot) is not None,
             "has_bite": self.recognizer.is_present(screenshot, "bite_indicator"),
             "is_reeling": self.recognizer.is_present(screenshot, "green_zone"),
             "reel_result": self._detect_reel_result(screenshot),
             "bait_low": self.recognizer.is_present(screenshot, "bait_low_warning"),
-            "setup_complete": False,  # 由 _execute_entry 中设置
         }
 
     def _detect_reel_result(self, screenshot: np.ndarray) -> Optional[str]:
@@ -149,10 +153,7 @@ class FishingBot:
     def _execute_entry(self, state: FishState, screenshot: np.ndarray, recog: dict):
         self._log(f">>> 进入 {state.name}")
 
-        if state == FishState.CHECK_READY:
-            self._check_ready_timeout = time.time()
-
-        elif state == FishState.INIT_SETUP:
+        if state == FishState.INIT_SETUP:
             self._do_initial_setup(screenshot)
 
         elif state == FishState.CAST:
@@ -162,7 +163,8 @@ class FishingBot:
 
         elif state == FishState.WAIT_BITE:
             self._bite_start_time = time.time()
-            self._log("等待鱼上钩...")
+            self._last_f_press = 0.0
+            self._log(f"开始定时按 F（间隔 {config.bite_f_interval}s）...")
 
         elif state == FishState.HOOK:
             time.sleep(config.hook_animation_wait)
@@ -185,77 +187,80 @@ class FishingBot:
     # ── 持续动作 ──
 
     def _execute_continuous(self, state: FishState, screenshot: np.ndarray, recog: dict):
-        if state == FishState.REELING:
+        if state == FishState.WAIT_BITE:
+            # 定时按 F 直到遛鱼界面出现
+            now = time.time()
+            if now - self._last_f_press >= config.bite_f_interval:
+                self.input.tap("F")
+                self._last_f_press = now
+        elif state == FishState.REELING:
             info = self.recognizer.detect_reeling(screenshot)
             if info and info.get("action") not in (None, "NONE"):
-                self.input.tap(info["action"])
+                self.input.press_key(info["action"], config.reel_press_duration)
 
     # ── 超时检查 ──
 
     def _check_timeouts(self, state: FishState):
-        if state == FishState.CHECK_READY:
-            if time.time() - self._check_ready_timeout > config.ready_timeout:
-                self._log("[中断] 未检测到钓鱼准备界面，请进入钓鱼准备界面后重试")
-                self.state_machine.stop()
-        elif state == FishState.WAIT_BITE:
+        if state == FishState.WAIT_BITE:
             if time.time() - self._bite_start_time > config.bite_timeout:
                 self._log("等待上钩超时，重新抛竿")
+                self._execute_entry(FishState.CAST, self.capture.capture(), {})
                 self.state_machine.state = FishState.CAST
         elif state == FishState.REELING:
             if time.time() - self._reel_start_time > config.reel_timeout:
                 self._log("遛鱼超时，鱼可能跑了")
                 self.state_machine._cycle_count += 1
+                self._execute_entry(FishState.CAST, self.capture.capture(), {})
                 self.state_machine.state = FishState.CAST
 
     # ── 子流程 ──
 
     def _do_initial_setup(self, screenshot: np.ndarray):
-        """首次准备：E → 换鱼饵界面 → 点击 bait → 点击 exchange"""
+        """首次准备：E 换鱼饵 → 检测 bait + exchange → 点击确认。"""
         self._log("首次准备：按 E 打开换鱼饵界面...")
         self.input.tap("E")
-        time.sleep(1.5)
+        time.sleep(2.0)
 
-        # 等待识别 exchange_bait
-        for attempt in range(8):
+        # exchange_bait 模板可能较大难以匹配，优先检测 bait 和 exchange 两个小元素
+        for attempt in range(15):
             ss = self.capture.capture()
             ui = self.recognizer.detect_bait_exchange_ui(ss)
-            if ui.get("exchange_bait"):
-                self._log("检测到换鱼饵界面")
 
-                # 点击 bait
-                if ui.get("bait"):
-                    self.input.click_at(ui["bait"])
-                    self._log("点击鱼饵")
-                    time.sleep(0.8)
+            # 成功: 同时检测到 bait 和 exchange
+            if ui.get("bait") and ui.get("exchange"):
+                self._log(f"检测到换饵界面 bait=({ui['bait'][0]},{ui['bait'][1]}) exchange=({ui['exchange'][0]},{ui['exchange'][1]})")
+                self.input.click_at(ui["bait"])
+                self._log("点击鱼饵")
+                time.sleep(1.0)
+                self.input.click_at(ui["exchange"])
+                self._log("点击确认更换")
+                time.sleep(2.0)
+                return
 
-                # 点击 exchange
-                if ui.get("exchange"):
-                    self.input.click_at(ui["exchange"])
+            # 降级: 只检测到 exchange → 可能已在界面内，直接点击
+            if ui.get("exchange"):
+                self._log(f"仅检测到 exchange，直接点击 ({ui['exchange'][0]},{ui['exchange'][1]})")
+                self.input.click_at(ui["exchange"])
+                time.sleep(1.5)
+                return
+
+            # 降级: 只检测到 bait → 点击后等 exchange 出现
+            if ui.get("bait"):
+                self._log(f"仅检测到 bait，点击 ({ui['bait'][0]},{ui['bait'][1]})")
+                self.input.click_at(ui["bait"])
+                time.sleep(1.0)
+                # 再试检测 exchange
+                ss2 = self.capture.capture()
+                ui2 = self.recognizer.detect_bait_exchange_ui(ss2)
+                if ui2.get("exchange"):
+                    self.input.click_at(ui2["exchange"])
                     self._log("点击确认更换")
                     time.sleep(1.5)
-
-                # 标记完成
-                recog = self._recognize_scene(self.capture.capture())
-                recog["setup_complete"] = True
-                self.state_machine.next_state(recog)
-                return
-
-            # 若 exchange_bait 还没出现但 exchange 单独出现 → 可能已经在界面内
-            if ui.get("exchange"):
-                self.input.click_at(ui["exchange"])
-                self._log("直接点击 exchange")
-                time.sleep(1.5)
-                recog = self._recognize_scene(self.capture.capture())
-                recog["setup_complete"] = True
-                self.state_machine.next_state(recog)
-                return
+                    return
 
             time.sleep(0.5)
 
-        self._log("[警告] 换鱼饵界面识别超时，跳过")
-        # 仍然标记完成以便继续
-        recog = self._recognize_scene(self.capture.capture())
-        recog["setup_complete"] = True
+        self._log("[提示] 未识别到换鱼饵界面，跳过换饵并继续抛竿")
 
     def _do_collect(self, screenshot: np.ndarray):
         """点击收杆结果"""

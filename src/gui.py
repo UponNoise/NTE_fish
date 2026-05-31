@@ -15,10 +15,10 @@ from src.state_machine import FishState
 
 # 状态中文映射
 STATE_NAMES: dict[FishState, str] = {
-    FishState.CHECK_READY: "检测准备界面",
+    FishState.START: "启动",
     FishState.INIT_SETUP: "首次换饵",
     FishState.CAST: "抛竿",
-    FishState.WAIT_BITE: "等待上钩",
+    FishState.WAIT_BITE: "定时按F等待",
     FishState.HOOK: "起勾",
     FishState.REELING: "遛鱼(A/D)",
     FishState.COLLECT: "收杆",
@@ -48,7 +48,7 @@ class FishingBotGUI:
         self.bot.set_on_stopped(self._on_bot_stopped)
 
         self._build_ui()
-        self._update_state_display(FishState.CHECK_READY, FishState.CHECK_READY)
+        self._update_state_display(FishState.START, FishState.START)
         self._run_startup_checks()
 
     # ---- UI 构建 ----
@@ -125,6 +125,16 @@ class FishingBotGUI:
         ttk.Spinbox(
             basic_frame, from_=5, to=120, increment=5,
             textvariable=self.var_bite_timeout, width=8
+        ).grid(row=row, column=1, sticky=tk.W, pady=2)
+
+        row += 1
+        ttk.Label(basic_frame, text="定时按F间隔 (秒):").grid(
+            row=row, column=0, sticky=tk.W, pady=2
+        )
+        self.var_bite_f_interval = tk.DoubleVar(value=config.bite_f_interval)
+        ttk.Spinbox(
+            basic_frame, from_=1.0, to=10.0, increment=0.5,
+            textvariable=self.var_bite_f_interval, width=8
         ).grid(row=row, column=1, sticky=tk.W, pady=2)
 
         row += 1
@@ -343,6 +353,7 @@ class FishingBotGUI:
         config.screen_capture_interval = self.var_interval.get()
         config.match_threshold = self.var_threshold.get()
         config.bite_timeout = self.var_bite_timeout.get()
+        config.bite_f_interval = self.var_bite_f_interval.get()
         config.reel_timeout = self.var_reel_timeout.get()
         config.max_cycles = self.var_max_cycles.get()
         config.bait_low_threshold = self.var_bait_threshold.get()
@@ -449,8 +460,9 @@ class FishingBotGUI:
             "cv2": "opencv-python",
             "numpy": "numpy",
             "mss": "mss",
-            "pynput": "pynput",
             "PIL": "Pillow",
+            "win32gui": "pywin32",
+            "psutil": "psutil",
         }
         for mod, pkg in modules.items():
             try:
@@ -459,7 +471,15 @@ class FishingBotGUI:
             except ImportError:
                 lines.append(f"  {pkg:<15}: ❌ 未安装 (pip install {pkg})")
 
-        # 3. HTGame.exe
+        # 3. 管理员权限
+        try:
+            import ctypes
+            is_admin = bool(ctypes.windll.shell32.IsUserAnAdmin())
+            lines.append(f"  管理员权限    : {'✅ 已启用' if is_admin else '⚠️ 未启用（若游戏用管理员运行，脚本也需管理员运行）'}")
+        except Exception:
+            lines.append("  管理员权限    : ⚠️ 无法检测")
+
+        # 4. HTGame.exe
         try:
             from src.window_capture import WindowCapture
             wins = WindowCapture.list_game_windows("HTGame.exe")
@@ -473,7 +493,7 @@ class FishingBotGUI:
             lines.append(f"  HTGame.exe      : ⚠️ 无法检测（pywin32 未安装）")
 
         lines.append("")
-        lines.append("  键鼠模式: 使用 pynput 模拟 F/A/D/E + 鼠标点击")
+        lines.append("  键鼠模式: 使用 Windows SendInput 扫描码模拟 F/A/D/E + 鼠标点击")
 
         self.env_text.insert("1.0", "\n".join(lines))
         self.env_text.config(state=tk.DISABLED)

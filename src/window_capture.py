@@ -5,6 +5,7 @@
 
 import ctypes
 import time
+from ctypes import wintypes
 from typing import Optional, Tuple, List
 
 import numpy as np
@@ -87,6 +88,54 @@ class WindowCapture:
             return False
         try:
             return win32gui.IsWindow(self._hwnd)
+        except Exception:
+            return False
+
+    def focus_window(self) -> bool:
+        """尽量把目标窗口切到前台，便于游戏接收 SendInput 按键。"""
+        if not HAS_WIN32:
+            return False
+
+        if self._hwnd is None:
+            hwnd = self.find_window()
+            if hwnd is None:
+                return False
+        else:
+            hwnd = self._hwnd
+
+        try:
+            if win32gui.IsIconic(hwnd):
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                time.sleep(0.1)
+
+            user32 = ctypes.WinDLL("user32", use_last_error=True)
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            user32.AttachThreadInput.argtypes = (wintypes.DWORD, wintypes.DWORD, wintypes.BOOL)
+            user32.AttachThreadInput.restype = wintypes.BOOL
+            user32.GetForegroundWindow.restype = wintypes.HWND
+            kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+
+            foreground = user32.GetForegroundWindow()
+            current_thread = kernel32.GetCurrentThreadId()
+            foreground_thread, _ = win32process.GetWindowThreadProcessId(foreground)
+            target_thread, _ = win32process.GetWindowThreadProcessId(hwnd)
+
+            if foreground_thread != current_thread:
+                user32.AttachThreadInput(current_thread, foreground_thread, True)
+            if target_thread != current_thread:
+                user32.AttachThreadInput(current_thread, target_thread, True)
+
+            try:
+                win32gui.BringWindowToTop(hwnd)
+                win32gui.SetForegroundWindow(hwnd)
+            finally:
+                if target_thread != current_thread:
+                    user32.AttachThreadInput(current_thread, target_thread, False)
+                if foreground_thread != current_thread:
+                    user32.AttachThreadInput(current_thread, foreground_thread, False)
+
+            time.sleep(0.1)
+            return user32.GetForegroundWindow() == hwnd
         except Exception:
             return False
 
