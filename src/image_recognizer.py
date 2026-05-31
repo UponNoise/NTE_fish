@@ -59,6 +59,7 @@ class ImageRecognizer:
     def __init__(self, assets_dir: Optional[str] = None):
         self.assets_dir = assets_dir or config.assets_dir
         self._template_cache: dict[str, np.ndarray] = {}
+        self._missing_templates: set[str] = set()
         self._init_catch_screen_template()
 
     def _init_catch_screen_template(self) -> None:
@@ -83,7 +84,7 @@ class ImageRecognizer:
         return TEMPLATE_ALIASES.get(name, (name,))
 
     def _load_template(self, name: str) -> Optional[np.ndarray]:
-        """加载模板图片（带缓存），不存在时返回 None。"""
+        """加载模板图片（带缓存），不存在时返回 None 并记录缺失。"""
         if name in self._template_cache:
             return self._template_cache[name]
 
@@ -94,7 +95,16 @@ class ImageRecognizer:
                 img = cv2.imdecode(data, cv2.IMREAD_COLOR)
                 if img is not None:
                     self._template_cache[name] = img
+                    # 曾经缺失过的话，现在找到就不报警了
+                    self._missing_templates.discard(name)
                     return img
+        # 仅警告一次
+        if name not in self._missing_templates:
+            self._missing_templates.add(name)
+            import logging
+            logging.getLogger("NTE_fish").warning(
+                f"[ImageRecognizer] 模板缺失: {name}.png/.jpg 未在 assets/ 中找到"
+            )
         return None
 
     # ── 通用匹配 ──
@@ -346,5 +356,10 @@ class ImageRecognizer:
     def _center_or_none(match: Optional[Match]) -> Optional[Tuple[int, int]]:
         return match.center if match else None
 
+    def list_missing_templates(self) -> list[str]:
+        """返回当前缺失的模板名称列表。"""
+        return sorted(self._missing_templates)
+
     def clear_cache(self):
         self._template_cache.clear()
+        self._missing_templates.clear()

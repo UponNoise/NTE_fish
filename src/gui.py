@@ -184,7 +184,7 @@ class FishingBotGUI:
         self.var_input_backend = tk.StringVar(value=config.input_backend)
         ttk.Combobox(
             basic_frame,
-            values=("scan_code", "vk", "keybd_event"),
+            values=("post_message", "scan_code", "vk", "keybd_event"),
             textvariable=self.var_input_backend,
             width=14,
             state="readonly",

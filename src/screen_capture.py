@@ -50,10 +50,16 @@ class ScreenCapture:
             region = self._window_capture.get_capture_region()
             if region is not None:
                 self._last_origin = (region[0], region[1])
+                # 主路径：mss 直接截取（快速可靠）
                 img = self._window_capture.capture_region(self._sct, region)
                 if img is not None:
                     return img
+            else:
+                rect = self._window_capture.get_window_rect()
+                if rect is not None:
+                    self._last_origin = (rect[0], rect[1])
 
+            # 兜底：PrintWindow/BitBlt（后台窗口也可截）
             img = self._window_capture.capture_window(self._sct)
             if img is not None:
                 return img
@@ -115,6 +121,13 @@ class ScreenCapture:
             return False
         wc = self._window_capture or WindowCapture(self.process_name)
         return wc.focus_window()
+
+    def get_game_hwnd(self) -> Optional[int]:
+        """返回目标游戏窗口 hwnd（用于后台输入）。"""
+        if not HAS_WINDOW_CAPTURE:
+            return None
+        wc = self._window_capture or WindowCapture(self.process_name)
+        return wc.get_hwnd()
 
     @property
     def window_capture(self) -> Optional[WindowCapture]:

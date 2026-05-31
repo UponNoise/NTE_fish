@@ -41,6 +41,12 @@ class FishingBot:
         self._hook_start_time: float = 0.0
         self._last_f_press: float = 0.0      # 上次按 F 的时间戳
         self._reel_start_time: float = 0.0
+        # 遛鱼结束 → catch 结果轮询状态（非阻塞，逐帧推进）
+        self._polling_catch: bool = False
+        self._poll_attempt: int = 0
+        self._poll_result: Optional[Tuple[str, int, int]] = None
+        # 遛鱼 UI 丢失帧计数（用于空跑退避）
+        self._reel_ui_lost_frames: int = 0
 
         # 回调
         self.state_machine.set_on_state_change(self._on_state_changed)
@@ -65,6 +71,12 @@ class FishingBot:
     def _log(self, msg: str):
         self._on_bot_log(msg)
 
+    def _update_input_target(self, warn: bool = False) -> None:
+        hwnd = self.capture.get_game_hwnd()
+        self.input.set_target_hwnd(hwnd)
+        if warn and hwnd is None and config.input_backend.lower() == "post_message":
+            self._log("[警告] 未找到游戏窗口，post_message 将回退为 SendInput")
+
     def _click_capture_position(self, position: tuple[int, int], label: str = "") -> None:
         x, y = self.capture.to_screen_position(position)
         self.input.click(x, y)
@@ -86,9 +98,16 @@ class FishingBot:
             self._log("机器人已在运行中")
             return
         self.state_machine.reset()
+        self._update_input_target(warn=True)
         self._log("=" * 50)
         self._log("钓鱼机器人启动（键鼠模式）")
         self._log("=" * 50)
+        # 报告缺失模板
+        missing = self.recognizer.list_missing_templates()
+        if missing:
+            self._log(f"[警告] 缺失 {len(missing)} 个模板素材，图像识别将失效！")
+            self._log(f"  缺失列表: {', '.join(missing[:10])}{'...' if len(missing) > 10 else ''}")
+            self._log(f"  请将对应素材放入 {config.assets_dir}/ 目录（见 assets/README.md）")
         if config.use_window_capture:
             if self.capture.focus_game_window():
                 self._log("已切换到游戏窗口")
@@ -121,6 +140,10 @@ class FishingBot:
                     break
 
                 if next_state != current:
+                    # 离开 REELING 时清空轮询状态
+                    if current == FishState.REELING:
+                        self._polling_catch = False
+                        self._poll_result = None
                     self._execute_entry(next_state, screenshot, recog)
                     self.state_machine.state = next_state
 
@@ -158,12 +181,22 @@ class FishingBot:
             reeling = self.recognizer.detect_reeling(screenshot)
             recog["is_reeling"] = reeling is not None
             recog["reeling"] = reeling
-            if reeling is None and time.time() - self._reel_start_time > 2.0:
-                # 遛鱼 UI 消失且已遛鱼超过 2s → 进入轮询等待 catch 结果
-                polled = self._poll_catch_result()
-                if polled is not None:
-                    recog["reel_result"] = polled[0]
-                    recog["catch_position"] = (polled[1], polled[2])
+            if reeling is not None:
+                # 遛鱼 UI 可见 → 清空轮询/丢失状态
+                self._polling_catch = False
+                self._poll_attempt = 0
+                self._poll_result = None
+                self._reel_ui_lost_frames = 0
+            elif time.time() - self._reel_start_time > 2.0:
+                # 遛鱼 UI 消失且已遛鱼超过 2s → 启动非阻塞轮询
+                if not self._polling_catch:
+                    self._polling_catch = True
+                    self._poll_attempt = 0
+                    self._poll_result = None
+                # recog 由 _execute_continuous 中的轮询逐帧填充
+                if self._poll_result is not None:
+                    recog["reel_result"] = self._poll_result[0]
+                    recog["catch_position"] = (self._poll_result[1], self._poll_result[2])
         elif state == FishState.CHECK_BAIT:
             recog["bait_low"] = self.recognizer.detect_bait_low(screenshot)
 
@@ -178,12 +211,14 @@ class FishingBot:
         result = "success" if "success" in name else "fail"
         return (result, r[1], r[2])
 
-    def _poll_catch_result(self, max_attempts: int = 40, interval: float = 0.12) -> Optional[Tuple[str, int, int]]:
-        """遛鱼结束后轮询检测 catch 结果，容忍过渡动画延迟。
+    def _poll_catch_result(self, max_attempts: Optional[int] = None, interval: Optional[float] = None) -> Optional[Tuple[str, int, int]]:
+        """遛鱼结束后轮询检测 catch 结果（阻塞式，仅超时回退时使用）。
 
-        最多轮询 max_attempts 次（约 4.8 秒），在游戏过渡动画期间持续尝试。
-        返回 (结果名, click_x, click_y) 或 None。
+        日常流程使用 _execute_continuous 中的非阻塞逐帧轮询。
+        此方法仅用作超时兜底。
         """
+        max_attempts = max_attempts or config.catch_poll_max_attempts
+        interval = interval or config.catch_poll_interval
         for i in range(max_attempts):
             ss = self.capture.capture()
             r = self.recognizer.detect_catch_result(ss, threshold=0.55)
@@ -221,6 +256,10 @@ class FishingBot:
 
         elif state == FishState.REELING:
             self._reel_start_time = time.time()
+            self._polling_catch = False
+            self._poll_attempt = 0
+            self._poll_result = None
+            self._reel_ui_lost_frames = 0
             self._log("遛鱼中 (A/D)...")
 
         elif state == FishState.COLLECT:
@@ -241,10 +280,39 @@ class FishingBot:
             if now - self._last_f_press >= config.bite_f_interval:
                 self.input.tap("F")
                 self._last_f_press = now
+
         elif state == FishState.REELING:
-            info = recog.get("reeling") or self.recognizer.detect_reeling(screenshot)
-            if info and info.get("action") not in (None, "NONE"):
-                self.input.press_key(info["action"], config.reel_press_duration)
+            # 遛鱼 UI 可见 → 正常控制
+            info = recog.get("reeling")
+            if info is not None:
+                action = info.get("action")
+                if action not in (None, "NONE"):
+                    self.input.press_key(action, config.reel_press_duration)
+                return
+
+            # 遛鱼 UI 消失后的 catch 结果轮询（逐帧推进，不阻塞主循环）
+            if self._polling_catch:
+                self._poll_attempt += 1
+                if self._poll_attempt > config.catch_poll_max_attempts:
+                    self._polling_catch = False
+                    self._log("[轮询] 超时未检测到 catch 结果")
+                    return
+                # 每隔一次才实际检测（降低 CPU 占用）
+                if self._poll_attempt % 2 != 0:
+                    return
+                r = self.recognizer.detect_catch_result(screenshot, threshold=0.55)
+                if r is not None:
+                    name = r[0]
+                    result = "success" if "success" in name else "fail"
+                    self._log(f"[轮询] 第 {self._poll_attempt // 2} 次检测到结果: {result} @ ({r[1]},{r[2]})")
+                    self._poll_result = (result, r[1], r[2])
+                    self._polling_catch = False
+                return
+
+            # 遛鱼 UI 丢失但还未到轮询时机 → 退避计数，避免空跑
+            self._reel_ui_lost_frames += 1
+            if self._reel_ui_lost_frames > 3:
+                time.sleep(0.08)  # 额外 sleep 降低空跑频率
 
     # ── 超时检查 ──
 

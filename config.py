@@ -28,8 +28,8 @@ class BotConfig:
     window_find_retry_interval: float = 2.0
 
     # ---------- 屏幕捕获 ----------
-    # 捕获间隔（秒）—— 遛鱼时需要高频响应，从 0.1 降至 0.05
-    screen_capture_interval: float = 0.05
+    # 捕获间隔（秒）—— 遛鱼时需要高频响应
+    screen_capture_interval: float = 0.03
     # 屏幕区域（仅在 use_window_capture=False 时生效），格式: (left, top, width, height)
     capture_region: Tuple[int, int, int, int] | None = None
 
@@ -44,8 +44,8 @@ class BotConfig:
     button_press_duration: float = 0.15
     # 按键间隔（秒）
     button_interval: float = 0.3
-    # 输入方式：scan_code / vk / keybd_event
-    input_backend: str = "scan_code"
+    # 输入方式：post_message / scan_code / vk / keybd_event
+    input_backend: str = "post_message"
     # 每次发键前尝试聚焦游戏窗口
     auto_focus_input: bool = True
 
@@ -55,15 +55,19 @@ class BotConfig:
     # 遛鱼最大持续时间（秒）
     reel_timeout: float = 60.0
     # 抛竿后等待动画时间（秒）
-    cast_animation_wait: float = 1.0
+    cast_animation_wait: float = 0.8
     # 起勾后等待进入遛鱼界面时间（秒）
-    hook_animation_wait: float = 0.5
+    hook_animation_wait: float = 0.3
 
     # ---------- 遛鱼控制 ----------
-    # A/D 按键时长（秒）—— 从 0.06 增至 0.10，让浮标移动距离更远
-    reel_press_duration: float = 0.10
+    # A/D 按键时长（秒）—— 足够让浮标位移到绿色区域
+    reel_press_duration: float = 0.18
     # 等待上钩时 F 键间隔（秒）—— bite_indicator 闪现太快，改为定时按 F
-    bite_f_interval: float = 2.5
+    bite_f_interval: float = 1.5
+    # 遛鱼 UI 消失后轮询 catch 结果的间隔（秒）
+    catch_poll_interval: float = 0.08
+    # 遛鱼 UI 消失后轮询 catch 结果的最大次数
+    catch_poll_max_attempts: int = 60
 
     # ---------- 渔获商店 ----------
     # 鱼饵不足阈值（数量）

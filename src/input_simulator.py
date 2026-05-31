@@ -17,6 +17,12 @@ KEYEVENTF_SCANCODE = 0x0008
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
 MAPVK_VK_TO_VSC = 0
+WM_KEYDOWN = 0x0100
+WM_KEYUP = 0x0101
+WM_MOUSEMOVE = 0x0200
+WM_LBUTTONDOWN = 0x0201
+WM_LBUTTONUP = 0x0202
+MK_LBUTTON = 0x0001
 
 
 class KEYBDINPUT(ctypes.Structure):
@@ -63,6 +69,13 @@ class INPUT(ctypes.Structure):
     )
 
 
+class POINT(ctypes.Structure):
+    _fields_ = (
+        ("x", wintypes.LONG),
+        ("y", wintypes.LONG),
+    )
+
+
 SCAN_CODES = {
     "A": 0x1E,
     "D": 0x20,
@@ -91,16 +104,30 @@ class InputSimulator:
         self._user32.MapVirtualKeyW.restype = wintypes.UINT
         self._user32.keybd_event.argtypes = (wintypes.BYTE, wintypes.BYTE, wintypes.DWORD, ULONG_PTR)
         self._user32.keybd_event.restype = None
+        self._user32.PostMessageW.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+        self._user32.PostMessageW.restype = wintypes.BOOL
+        self._user32.ScreenToClient.argtypes = (wintypes.HWND, ctypes.POINTER(POINT))
+        self._user32.ScreenToClient.restype = wintypes.BOOL
         self._pressed_keys: set[str] = set()
         self._focus_callback: Optional[Callable[[], bool]] = None
+        self._target_hwnd: Optional[int] = None
 
     def set_focus_callback(self, callback: Callable[[], bool]) -> None:
         """设置输入前的窗口聚焦回调。"""
         self._focus_callback = callback
 
+    def set_target_hwnd(self, hwnd: Optional[int]) -> None:
+        """设置后台输入目标窗口句柄。"""
+        self._target_hwnd = hwnd
+
+    def _use_post_message(self) -> bool:
+        return config.input_backend.lower() == "post_message" and self._target_hwnd is not None
+
     # ── 键盘 ──
 
     def _focus_before_input(self) -> None:
+        if self._use_post_message():
+            return
         if config.auto_focus_input and self._focus_callback:
             self._focus_callback()
             time.sleep(0.03)
@@ -136,10 +163,26 @@ class InputSimulator:
             raise ValueError(f"不支持的按键: {key!r}，当前支持 {', '.join(sorted(VK_CODES))}")
         return VK_CODES[normalized]
 
+    def _post_key(self, vk_code: int, scan_code: int, key_up: bool) -> bool:
+        hwnd = self._target_hwnd
+        if hwnd is None:
+            return False
+        msg = WM_KEYUP if key_up else WM_KEYDOWN
+        lparam = 1 | (scan_code << 16)
+        if key_up:
+            lparam |= 0xC0000000
+        self._user32.PostMessageW(hwnd, msg, vk_code, lparam)
+        return True
+
     def _send_key(self, key: str, key_up: bool = False) -> None:
         vk_code = self._vk_code_for(key)
         scan_code = self._scan_code_for(key)
         backend = config.input_backend.lower()
+
+        if backend == "post_message":
+            if self._post_key(vk_code, scan_code, key_up):
+                return
+            backend = "scan_code"
 
         if backend == "vk":
             mapped_scan = int(self._user32.MapVirtualKeyW(vk_code, MAPVK_VK_TO_VSC)) or scan_code
@@ -180,6 +223,8 @@ class InputSimulator:
     def move_to(self, x: int, y: int) -> None:
         """移动鼠标到屏幕绝对坐标"""
         self._focus_before_input()
+        if self._use_post_message():
+            return
         if not self._user32.SetCursorPos(int(x), int(y)):
             error = ctypes.get_last_error()
             raise OSError(error, f"SetCursorPos failed at ({x}, {y})")
@@ -193,8 +238,26 @@ class InputSimulator:
             error = ctypes.get_last_error()
             raise OSError(error, "SendInput mouse failed")
 
+    def _post_mouse_click(self, x: int, y: int) -> bool:
+        hwnd = self._target_hwnd
+        if hwnd is None:
+            return False
+        point = POINT(int(x), int(y))
+        if not self._user32.ScreenToClient(hwnd, ctypes.byref(point)):
+            return False
+        lparam = (point.y << 16) | (point.x & 0xFFFF)
+        self._user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
+        self._user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
+        self._user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
+        return True
+
     def click(self, x: Optional[int] = None, y: Optional[int] = None) -> None:
         """鼠标左键点击。可先移动到 (x,y) 再点击"""
+        if x is not None and y is not None and self._use_post_message():
+            if self._post_mouse_click(x, y):
+                time.sleep(0.05)
+                return
+
         if x is not None and y is not None:
             self.move_to(x, y)
         self._send_mouse(MOUSEEVENTF_LEFTDOWN)

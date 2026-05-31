@@ -21,10 +21,7 @@ env/
 # 配置（含个人设置）
 config.json
 
-# 素材（用户自行提供）
-assets/*.png
-assets/*.jpg
-assets/*.jpeg
+# 素材 —— 已纳入版本管理，请勿添加单个大文件（>5MB）
 
 # 系统文件
 Thumbs.db

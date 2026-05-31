@@ -14,6 +14,7 @@ try:
     import win32gui
     import win32process
     import win32con
+    import win32ui
     import psutil
     HAS_WIN32 = True
 except ImportError:
@@ -90,6 +91,14 @@ class WindowCapture:
             return win32gui.IsWindow(self._hwnd)
         except Exception:
             return False
+
+    def get_hwnd(self) -> Optional[int]:
+        """获取可用窗口句柄，没有则尝试重新查找。"""
+        if not HAS_WIN32:
+            return None
+        if self._hwnd is not None and self.is_window_alive():
+            return self._hwnd
+        return self.find_window()
 
     def focus_window(self) -> bool:
         """尽量把目标窗口切到前台，便于游戏接收 SendInput 按键。"""
@@ -185,9 +194,62 @@ class WindowCapture:
 
     # ---- 截屏 ----
 
+    def capture_window_print(self) -> Optional[np.ndarray]:
+        """尝试使用 PrintWindow/BitBlt 捕获窗口（即使窗口被遮挡）。"""
+        if not HAS_WIN32:
+            return None
+
+        hwnd = self.get_hwnd()
+        if hwnd is None:
+            return None
+        if win32gui.IsIconic(hwnd):
+            return None
+
+        hwnd_dc = None
+        mfc_dc = None
+        save_dc = None
+        save_bitmap = None
+
+        try:
+            left, top, right, bottom = win32gui.GetClientRect(hwnd)
+            width = right - left
+            height = bottom - top
+            if width <= 0 or height <= 0:
+                return None
+
+            hwnd_dc = win32gui.GetWindowDC(hwnd)
+            mfc_dc = win32ui.CreateDCFromHandle(hwnd_dc)
+            save_dc = mfc_dc.CreateCompatibleDC()
+            save_bitmap = win32ui.CreateBitmap()
+            save_bitmap.CreateCompatibleBitmap(mfc_dc, width, height)
+            save_dc.SelectObject(save_bitmap)
+
+            # PW_RENDERFULLCONTENT = 2
+            result = ctypes.windll.user32.PrintWindow(hwnd, save_dc.GetSafeHdc(), 2)
+            if result != 1:
+                save_dc.BitBlt((0, 0), (width, height), mfc_dc, (0, 0), win32con.SRCCOPY)
+
+            bmpinfo = save_bitmap.GetInfo()
+            bmpstr = save_bitmap.GetBitmapBits(True)
+            img = np.frombuffer(bmpstr, dtype=np.uint8)
+            img = img.reshape((bmpinfo["bmHeight"], bmpinfo["bmWidth"], 4))
+            img = img[::-1, :, :3]
+            return img
+        except Exception:
+            return None
+        finally:
+            if save_bitmap is not None:
+                win32gui.DeleteObject(save_bitmap.GetHandle())
+            if save_dc is not None:
+                save_dc.DeleteDC()
+            if mfc_dc is not None:
+                mfc_dc.DeleteDC()
+            if hwnd_dc is not None:
+                win32gui.ReleaseDC(hwnd, hwnd_dc)
+
     def capture_window(self, sct) -> Optional[np.ndarray]:
         """
-        使用已有的 mss 实例截取窗口画面。
+        使用 PrintWindow/BitBlt 或 mss 实例截取窗口画面。
 
         Args:
             sct: mss.mss() 实例
@@ -195,6 +257,10 @@ class WindowCapture:
         Returns:
             BGR numpy 数组 (H, W, 3) 或 None
         """
+        img = self.capture_window_print()
+        if img is not None:
+            return img
+
         region = self.get_capture_region()
         if region is None:
             return None

@@ -13,10 +13,7 @@ venv/
 .vscode/
 .idea/
 
-# 素材（用户提供）
-assets/*.png
-assets/*.jpg
-assets/*.jpeg
+# 素材 —— 已纳入版本管理
 
 # 配置文件
 config.json
