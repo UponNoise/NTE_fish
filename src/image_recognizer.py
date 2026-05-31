@@ -252,7 +252,7 @@ class ImageRecognizer:
         green_x = green.center[0]
         marker_x = marker.center[0]
         offset = green_x - marker_x
-        dead_zone = max(8, int(green.size[0] * 0.08))
+        dead_zone = max(12, int(green.size[0] * 0.12))
 
         if abs(offset) <= dead_zone:
             action = "NONE"
@@ -276,11 +276,14 @@ class ImageRecognizer:
             "exchange": self._center_or_none(self.find_best(screenshot, "exchange", threshold=0.68, scales=FAST_SCALES)),
         }
 
-    def detect_catch_result(self, screenshot: np.ndarray) -> Optional[Tuple[str, int, int]]:
-        """检测钓鱼成功或失败结果。"""
-        search = self._relative_region(screenshot, 0.0, 0.0, 1.0, 0.75)
-        success = self.find_best(screenshot, "catch_success", threshold=0.66, region=search, scales=FAST_SCALES)
-        fail = self.find_best(screenshot, "catch_fail", threshold=0.66, region=search, scales=FAST_SCALES)
+    def detect_catch_result(self, screenshot: np.ndarray, threshold: float = 0.58) -> Optional[Tuple[str, int, int]]:
+        """检测钓鱼成功或失败结果。
+
+        搜索全屏，使用更低阈值和多尺度以适应不同分辨率和 UI 缩放。
+        """
+        search = self._relative_region(screenshot, 0.0, 0.0, 1.0, 1.0)
+        success = self.find_best(screenshot, "catch_success", threshold=threshold, region=search, scales=DEFAULT_SCALES)
+        fail = self.find_best(screenshot, "catch_fail", threshold=threshold, region=search, scales=DEFAULT_SCALES)
 
         if success is None and fail is None:
             return None

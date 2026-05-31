@@ -158,19 +158,36 @@ class FishingBot:
             reeling = self.recognizer.detect_reeling(screenshot)
             recog["is_reeling"] = reeling is not None
             recog["reeling"] = reeling
-            if reeling is None:
-                recog["reel_result"] = self._detect_reel_result(screenshot)
+            if reeling is None and time.time() - self._reel_start_time > 2.0:
+                # 遛鱼 UI 消失且已遛鱼超过 2s → 进入轮询等待 catch 结果
+                recog["reel_result"] = self._poll_catch_result()
         elif state == FishState.CHECK_BAIT:
             recog["bait_low"] = self.recognizer.detect_bait_low(screenshot)
 
         return recog
 
     def _detect_reel_result(self, screenshot: np.ndarray) -> Optional[str]:
-        r = self.recognizer.detect_catch_result(screenshot)
+        r = self.recognizer.detect_catch_result(screenshot, threshold=0.55)
         if r is None:
             return None
         name = r[0]
         return "success" if "success" in name else "fail"
+
+    def _poll_catch_result(self, max_attempts: int = 40, interval: float = 0.12) -> Optional[str]:
+        """遛鱼结束后轮询检测 catch 结果，容忍过渡动画延迟。
+
+        最多轮询 max_attempts 次（约 4.8 秒），在游戏过渡动画期间持续尝试。
+        """
+        for i in range(max_attempts):
+            ss = self.capture.capture()
+            r = self.recognizer.detect_catch_result(ss, threshold=0.55)
+            if r is not None:
+                name = r[0]
+                result = "success" if "success" in name else "fail"
+                self._log(f"轮询第 {i+1} 次检测到结果: {result}")
+                return result
+            time.sleep(interval)
+        return None
 
     # ── 状态入口动作 ──
 
@@ -233,6 +250,16 @@ class FishingBot:
                 self.state_machine.state = FishState.CAST
         elif state == FishState.REELING:
             if time.time() - self._reel_start_time > config.reel_timeout:
+                # 超时前最后尝试检测 catch 结果（可能模板匹配阈值刚好差一点）
+                ss = self.capture.capture()
+                result = self._detect_reel_result(ss)
+                if result:
+                    self._log(f"遛鱼超时但检测到结果: {result}")
+                    recog_dict = {"reel_result": result}
+                    if self.state_machine.next_state(recog_dict) == FishState.COLLECT:
+                        self._execute_entry(FishState.COLLECT, ss, {})
+                        self.state_machine.state = FishState.COLLECT
+                        return
                 self._log("遛鱼超时，鱼可能跑了")
                 self.state_machine._cycle_count += 1
                 self._execute_entry(FishState.CAST, self.capture.capture(), {})
@@ -292,7 +319,7 @@ class FishingBot:
 
     def _do_collect(self, screenshot: np.ndarray):
         """点击收杆结果"""
-        r = self.recognizer.detect_catch_result(screenshot)
+        r = self.recognizer.detect_catch_result(screenshot, threshold=0.55)
         if r:
             _, cx, cy = r
             self._click_capture_position((cx, cy), "点击收杆结果")

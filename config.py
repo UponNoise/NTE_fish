@@ -28,8 +28,8 @@ class BotConfig:
     window_find_retry_interval: float = 2.0
 
     # ---------- 屏幕捕获 ----------
-    # 捕获间隔（秒）
-    screen_capture_interval: float = 0.1
+    # 捕获间隔（秒）—— 遛鱼时需要高频响应，从 0.1 降至 0.05
+    screen_capture_interval: float = 0.05
     # 屏幕区域（仅在 use_window_capture=False 时生效），格式: (left, top, width, height)
     capture_region: Tuple[int, int, int, int] | None = None
 
@@ -60,8 +60,8 @@ class BotConfig:
     hook_animation_wait: float = 0.5
 
     # ---------- 遛鱼控制 ----------
-    # A/D 按键时长（秒）
-    reel_press_duration: float = 0.06
+    # A/D 按键时长（秒）—— 从 0.06 增至 0.10，让浮标移动距离更远
+    reel_press_duration: float = 0.10
     # 等待上钩时 F 键间隔（秒）—— bite_indicator 闪现太快，改为定时按 F
     bite_f_interval: float = 2.5
 
