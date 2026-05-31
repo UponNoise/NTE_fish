@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# 虚拟环境
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# 素材（用户提供）
+assets/*.png
+assets/*.jpg
+assets/*.jpeg
+
+# 配置文件
+config.json
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# 系统
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# 日志
+*.log

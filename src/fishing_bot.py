@@ -19,7 +19,12 @@ class FishingBot:
     """异环钓鱼自动化机器人"""
 
     def __init__(self):
-        self.capture = ScreenCapture(region=config.capture_region)
+        # 根据配置选择捕获模式
+        self.capture = ScreenCapture(
+            region=config.capture_region,
+            use_window=config.use_window_capture,
+            process_name=config.target_process,
+        )
         self.recognizer = ImageRecognizer()
         self.input = InputSimulator()
         self.state_machine = FishingStateMachine()
@@ -31,6 +36,20 @@ class FishingBot:
         # 设置状态机回调
         self.state_machine.set_on_state_change(self._on_state_changed)
         self.state_machine.set_on_log(self._on_bot_log)
+
+    # ---- 窗口检测（供 GUI 调用） ----
+
+    def find_game_window(self) -> Optional[dict]:
+        """查找游戏窗口，返回窗口信息或 None"""
+        region = self.capture.find_game_window()
+        if region is None:
+            return None
+        return {
+            "left": region[0],
+            "top": region[1],
+            "width": region[2],
+            "height": region[3],
+        }
 
     # ---- 外部回调（由 GUI 设置） ----
 

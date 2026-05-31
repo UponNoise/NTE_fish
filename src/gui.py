@@ -36,8 +36,8 @@ class FishingBotGUI:
 
         # 主窗口
         self.root = tk.Tk()
-        self.root.title("异环钓鱼自动化 v1.0")
-        self.root.geometry("700x650")
+        self.root.title("异环钓鱼自动化 v1.1")
+        self.root.geometry("720x720")
         self.root.resizable(True, True)
 
         # 设置机器人回调
@@ -48,6 +48,7 @@ class FishingBotGUI:
 
         self._build_ui()
         self._update_state_display(FishState.IDLE, FishState.IDLE)
+        self._run_startup_checks()
 
     # ---- UI 构建 ----
 
@@ -210,51 +211,98 @@ class FishingBotGUI:
             foreground="gray",
         ).grid(row=row + 1, column=0, columnspan=2, sticky=tk.W, pady=5)
 
-        # ---- 捕获区域 ----
-        region_frame = ttk.Frame(notebook, padding=10)
-        notebook.add(region_frame, text="捕获区域")
+        # ---- 窗口捕获 ----
+        win_frame = ttk.Frame(notebook, padding=10)
+        notebook.add(win_frame, text="窗口捕获")
 
-        ttk.Label(
-            region_frame,
-            text="设置屏幕捕获区域（留空使用全屏）：\n格式: left, top, width, height",
+        # 窗口捕获开关
+        self.var_use_window = tk.BooleanVar(value=config.use_window_capture)
+        ttk.Checkbutton(
+            win_frame,
+            text="启用窗口捕获模式（自动定位 HTGame.exe 游戏窗口）",
+            variable=self.var_use_window,
+            command=self._on_window_mode_toggle,
         ).pack(anchor=tk.W, pady=5)
 
-        region_entry_frame = ttk.Frame(region_frame)
-        region_entry_frame.pack(fill=tk.X, pady=5)
-
-        ttk.Label(region_entry_frame, text="Left:").pack(side=tk.LEFT, padx=2)
-        self.var_region_left = tk.IntVar(value=0)
-        ttk.Entry(region_entry_frame, textvariable=self.var_region_left, width=6).pack(
-            side=tk.LEFT, padx=2
-        )
-
-        ttk.Label(region_entry_frame, text="Top:").pack(side=tk.LEFT, padx=2)
-        self.var_region_top = tk.IntVar(value=0)
-        ttk.Entry(region_entry_frame, textvariable=self.var_region_top, width=6).pack(
-            side=tk.LEFT, padx=2
-        )
-
-        ttk.Label(region_entry_frame, text="Width:").pack(side=tk.LEFT, padx=2)
-        self.var_region_w = tk.IntVar(value=1920)
-        ttk.Entry(region_entry_frame, textvariable=self.var_region_w, width=6).pack(
-            side=tk.LEFT, padx=2
-        )
-
-        ttk.Label(region_entry_frame, text="Height:").pack(side=tk.LEFT, padx=2)
-        self.var_region_h = tk.IntVar(value=1080)
-        ttk.Entry(region_entry_frame, textvariable=self.var_region_h, width=6).pack(
-            side=tk.LEFT, padx=2
-        )
-
+        ttk.Label(
+            win_frame,
+            text="目标进程名:",
+        ).pack(anchor=tk.W)
+        proc_frame = ttk.Frame(win_frame)
+        proc_frame.pack(fill=tk.X, pady=2)
+        self.var_process_name = tk.StringVar(value=config.target_process)
+        ttk.Entry(
+            proc_frame, textvariable=self.var_process_name, width=20
+        ).pack(side=tk.LEFT, padx=2)
         ttk.Button(
-            region_frame, text="应用捕获区域", command=self._apply_region
-        ).pack(pady=10)
+            proc_frame, text="检测窗口", command=self._detect_window
+        ).pack(side=tk.LEFT, padx=5)
+
+        # 窗口信息显示
+        self.win_info_frame = ttk.LabelFrame(win_frame, text="游戏窗口信息", padding=8)
+        self.win_info_frame.pack(fill=tk.X, pady=10)
+
+        self.lbl_win_status = ttk.Label(
+            self.win_info_frame, text="状态: 未检测", foreground="gray"
+        )
+        self.lbl_win_status.pack(anchor=tk.W)
+        self.lbl_win_rect = ttk.Label(
+            self.win_info_frame, text="位置: —", foreground="gray"
+        )
+        self.lbl_win_rect.pack(anchor=tk.W)
+        self.lbl_win_size = ttk.Label(
+            self.win_info_frame, text="分辨率: —", foreground="gray"
+        )
+        self.lbl_win_size.pack(anchor=tk.W)
+
+        # ---- 手动捕获区域（窗口模式关闭时使用） ----
+        self.manual_region_frame = ttk.LabelFrame(win_frame, text="手动捕获区域", padding=8)
+        self.manual_region_frame.pack(fill=tk.X, pady=10)
 
         ttk.Label(
-            region_frame,
-            text="提示：可以使用区域捕获来提高识别精度和性能",
+            self.manual_region_frame,
+            text="分辨率范围: 800×600 ~ 3840×2160\n格式: left, top, width, height",
             foreground="gray",
-        ).pack(anchor=tk.W)
+        ).pack(anchor=tk.W, pady=2)
+
+        entry_frame = ttk.Frame(self.manual_region_frame)
+        entry_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Label(entry_frame, text="L:").pack(side=tk.LEFT, padx=1)
+        self.var_region_left = tk.IntVar(value=0)
+        ttk.Entry(entry_frame, textvariable=self.var_region_left, width=5).pack(side=tk.LEFT, padx=2)
+
+        ttk.Label(entry_frame, text="T:").pack(side=tk.LEFT, padx=1)
+        self.var_region_top = tk.IntVar(value=0)
+        ttk.Entry(entry_frame, textvariable=self.var_region_top, width=5).pack(side=tk.LEFT, padx=2)
+
+        ttk.Label(entry_frame, text="W:").pack(side=tk.LEFT, padx=1)
+        self.var_region_w = tk.IntVar(value=1920)
+        ttk.Entry(entry_frame, textvariable=self.var_region_w, width=6).pack(side=tk.LEFT, padx=2)
+
+        ttk.Label(entry_frame, text="H:").pack(side=tk.LEFT, padx=1)
+        self.var_region_h = tk.IntVar(value=1080)
+        ttk.Entry(entry_frame, textvariable=self.var_region_h, width=6).pack(side=tk.LEFT, padx=2)
+
+        ttk.Button(
+            self.manual_region_frame, text="应用手动区域", command=self._apply_region
+        ).pack(pady=5)
+
+        # 初始状态：窗口模式默认启用，隐藏手动区域
+        self._on_window_mode_toggle()
+
+        # ---- 环境检查 ----
+        env_frame = ttk.Frame(notebook, padding=10)
+        notebook.add(env_frame, text="环境检查")
+
+        self.env_text = tk.Text(
+            env_frame, height=12, wrap=tk.WORD, state=tk.DISABLED,
+            font=("Consolas", 9), bg="#f5f5f5",
+        )
+        self.env_text.pack(fill=tk.BOTH, expand=True)
+        ttk.Button(
+            env_frame, text="重新检查环境", command=self._run_startup_checks
+        ).pack(pady=5)
 
         # ---- 日志区域 ----
         log_frame = ttk.LabelFrame(self.root, text="运行日志", padding=5)
@@ -279,6 +327,18 @@ class FishingBotGUI:
         if self._running:
             return
         self._apply_settings()
+
+        # 窗口模式下，检查能否找到游戏窗口
+        if config.use_window_capture:
+            win_info = self.bot.find_game_window()
+            if win_info is None:
+                messagebox.showwarning(
+                    "窗口未找到",
+                    f"未找到 {config.target_process} 的游戏窗口！\n\n"
+                    "请先启动游戏，或关闭窗口捕获模式使用手动区域。",
+                )
+                return
+
         self._running = True
         self.btn_start.config(state=tk.DISABLED)
         self.btn_stop.config(state=tk.NORMAL)
@@ -307,17 +367,181 @@ class FishingBotGUI:
         config.reel_press_min = self.var_reel_min.get()
         config.reel_press_max = self.var_reel_max.get()
         config.reel_dead_zone_ratio = self.var_dead_zone.get()
+        config.use_window_capture = self.var_use_window.get()
+        config.target_process = self.var_process_name.get()
+
+        # 同步捕获模式到 bot
+        self.bot.capture.set_window_mode(
+            enabled=config.use_window_capture,
+            process_name=config.target_process,
+        )
         self._log("[设置] 已应用")
 
     def _apply_region(self):
-        """应用捕获区域设置"""
+        """应用手动捕获区域设置（含分辨率校验）"""
+        from config import RESOLUTION_MIN, RESOLUTION_MAX
+
         left = self.var_region_left.get()
         top = self.var_region_top.get()
         w = self.var_region_w.get()
         h = self.var_region_h.get()
+
+        # 分辨率校验
+        if w < RESOLUTION_MIN[0] or h < RESOLUTION_MIN[1]:
+            messagebox.showwarning(
+                "分辨率过低",
+                f"捕获区域不能小于 {RESOLUTION_MIN[0]}×{RESOLUTION_MIN[1]}（当前 {w}×{h}）",
+            )
+            return
+        if w > RESOLUTION_MAX[0] or h > RESOLUTION_MAX[1]:
+            messagebox.showwarning(
+                "分辨率过高",
+                f"捕获区域不能大于 {RESOLUTION_MAX[0]}×{RESOLUTION_MAX[1]}（当前 {w}×{h}）",
+            )
+            return
+
         config.capture_region = (left, top, w, h)
         self.bot.capture.set_region(config.capture_region)
-        self._log(f"[区域] 捕获区域设为 ({left}, {top}, {w}, {h})")
+        self._log(f"[区域] 手动捕获区域设为 ({left}, {top}, {w}, {h})")
+
+    # ---- 窗口检测 ----
+
+    def _detect_window(self):
+        """检测 HTGame.exe 游戏窗口"""
+        process_name = self.var_process_name.get()
+        self._log(f"[窗口] 正在查找进程 {process_name} ...")
+
+        win_info = self.bot.find_game_window()
+
+        if win_info is None:
+            self.lbl_win_status.config(text="状态: ❌ 未找到", foreground="red")
+            self.lbl_win_rect.config(text="位置: —")
+            self.lbl_win_size.config(text="分辨率: —")
+            self._log(f"[窗口] 未找到进程 {process_name}，请确认游戏已启动")
+            return
+
+        self.lbl_win_status.config(
+            text=f"状态: ✅ 已找到 ({process_name})", foreground="green"
+        )
+        self.lbl_win_rect.config(
+            text=f"位置: left={win_info['left']}, top={win_info['top']}"
+        )
+        w, h = win_info["width"], win_info["height"]
+        self.lbl_win_size.config(text=f"分辨率: {w}×{h}")
+
+        # 回填到手动区域
+        self.var_region_left.set(win_info["left"])
+        self.var_region_top.set(win_info["top"])
+        self.var_region_w.set(w)
+        self.var_region_h.set(h)
+
+        self._log(f"[窗口] 已找到: ({win_info['left']}, {win_info['top']}) {w}×{h}")
+
+    def _on_window_mode_toggle(self):
+        """窗口捕获模式切换"""
+        if self.var_use_window.get():
+            self.manual_region_frame.pack_forget()
+            self._detect_window()
+        else:
+            self.manual_region_frame.pack(fill=tk.X, pady=10)
+
+    # ---- 环境检查 ----
+
+    def _run_startup_checks(self):
+        """启动时检查运行环境"""
+        self.env_text.config(state=tk.NORMAL)
+        self.env_text.delete("1.0", tk.END)
+
+        lines = []
+        lines.append("═" * 45)
+        lines.append("  NTE 异环钓鱼自动化 - 环境检查")
+        lines.append("═" * 45)
+        lines.append("")
+
+        # 1. Python 版本
+        import sys
+        py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+        lines.append(f"  Python 版本    : {py_ver}  {'✅' if sys.version_info >= (3, 10) else '❌ 需要 3.10+'}")
+
+        # 2. 依赖检查
+        modules = {
+            "cv2": "opencv-python",
+            "numpy": "numpy",
+            "mss": "mss",
+            "vgamepad": "vgamepad",
+            "PIL": "Pillow",
+        }
+        for mod, pkg in modules.items():
+            try:
+                __import__(mod)
+                lines.append(f"  {pkg:<15}: ✅ 已安装")
+            except ImportError:
+                lines.append(f"  {pkg:<15}: ❌ 未安装 (pip install {pkg})")
+
+        # 3. pywin32 / psutil
+        for mod, pkg in [("win32gui", "pywin32"), ("psutil", "psutil")]:
+            try:
+                __import__(mod)
+                lines.append(f"  {pkg:<15}: ✅ 已安装")
+            except ImportError:
+                lines.append(f"  {pkg:<15}: ⚠️ 未安装（窗口捕获需要）")
+
+        # 4. ViGEmBus 驱动
+        driver_ok = self._check_vigembus()
+        lines.append(f"  ViGEmBus 驱动  : {'✅ 已安装' if driver_ok else '❌ 未安装（虚拟手柄需要）'}")
+
+        # 5. HTGame.exe
+        try:
+            from src.window_capture import WindowCapture
+            wins = WindowCapture.list_game_windows("HTGame.exe")
+            if wins:
+                lines.append(f"  HTGame.exe      : ✅ 已运行 ({len(wins)} 个窗口)")
+                for w in wins:
+                    lines.append(f"    └─ {w['title'][:40]}  {w['size']}")
+            else:
+                lines.append(f"  HTGame.exe      : ⚠️ 未检测到进程（请先启动游戏）")
+        except Exception:
+            lines.append(f"  HTGame.exe      : ⚠️ 无法检测（pywin32 未安装）")
+
+        lines.append("")
+        if not driver_ok:
+            lines.append("  ⚠️ 请运行 setup.bat 或手动安装 ViGEmBus 驱动:")
+            lines.append("     https://github.com/nefarius/ViGEmBus/releases")
+
+        self.env_text.insert("1.0", "\n".join(lines))
+        self.env_text.config(state=tk.DISABLED)
+
+    @staticmethod
+    def _check_vigembus() -> bool:
+        """检查 ViGEmBus 驱动是否已安装"""
+        import subprocess
+
+        # 方式1: 检查驱动文件
+        import os
+        if os.path.exists(r"C:\Windows\System32\drivers\ViGEmBus.sys"):
+            return True
+
+        # 方式2: 尝试通过 vgamepad 检测
+        try:
+            import vgamepad as vg
+            g = vg.VX360Gamepad()
+            g.update()
+            return True
+        except Exception:
+            pass
+
+        # 方式3: 检查注册表
+        try:
+            result = subprocess.run(
+                ["reg", "query", r"HKLM\SYSTEM\CurrentControlSet\Services\ViGEmBus"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                return True
+        except Exception:
+            pass
+
+        return False
 
     def _append_log(self, msg: str):
         """追加日志（线程安全）"""

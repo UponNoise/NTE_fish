@@ -1,0 +1,40 @@
+# NTE 异环钓鱼自动化 - Docker Compose 配置
+#
+# ⚠️ 重要提示：
+# 由于本工具需要：
+#   1. 直接截取桌面/窗口画面（mss）
+#   2. 创建虚拟 Xbox 360 手柄设备（vgamepad + ViGEmBus）
+#   3. GUI 图形界面（tkinter）
+# Docker 容器内无法直接完成上述操作。
+#
+# 此 compose 文件主要用于：
+#   - 验证 Python 环境和依赖完整性
+#   - CI/CD 自动化测试
+#   - 开发环境一键搭建（搭配 VS Code Dev Containers）
+#
+# 实际使用请参考宿主机部署方式：运行 setup.bat
+
+version: "3.9"
+
+services:
+  nte-fish-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nte-fish-bot:latest
+    container_name: nte-fish-bot
+    # 验证模式：仅检查模块导入是否正常
+    command: >
+      python -c "
+      import sys;
+      print('Python', sys.version);
+      from config import config; print('config OK');
+      from src.state_machine import FishingStateMachine; print('state_machine OK');
+      from src.image_recognizer import ImageRecognizer; print('image_recognizer OK');
+      print('All modules loaded successfully');
+      "
+    volumes:
+      - ./assets:/app/assets:ro
+      - ./config.json:/app/config.json:ro
+    environment:
+      - PYTHONUNBUFFERED=1

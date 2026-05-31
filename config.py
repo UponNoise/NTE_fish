@@ -4,18 +4,33 @@ NTE 异环钓鱼自动化脚本 - 配置文件
 
 import json
 import os
-from dataclasses import dataclass, field
-from typing import Dict, Tuple
+from dataclasses import dataclass
+from typing import Tuple
+
+
+# 分辨率约束
+RESOLUTION_MIN = (800, 600)       # 最小 800×600
+RESOLUTION_MAX = (3840, 2160)     # 最大 3840×2160
 
 
 @dataclass
 class BotConfig:
     """钓鱼机器人全局配置"""
 
+    # ---------- 窗口捕获 ----------
+    # 目标进程名
+    target_process: str = "HTGame.exe"
+    # 是否使用窗口捕获模式（自动定位游戏窗口），False 则使用 capture_region
+    use_window_capture: bool = True
+    # 窗口查找重试次数（找不到窗口时）
+    window_find_retries: int = 3
+    # 窗口查找重试间隔（秒）
+    window_find_retry_interval: float = 2.0
+
     # ---------- 屏幕捕获 ----------
     # 捕获间隔（秒）
     screen_capture_interval: float = 0.1
-    # 屏幕区域（None 表示全屏），格式: (left, top, width, height)
+    # 屏幕区域（仅在 use_window_capture=False 时生效），格式: (left, top, width, height)
     capture_region: Tuple[int, int, int, int] | None = None
 
     # ---------- 图像识别 ----------
