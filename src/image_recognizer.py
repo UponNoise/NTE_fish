@@ -32,12 +32,19 @@ TEMPLATE_ALIASES: dict[str, tuple[str, ...]] = {
     "green_zone": ("green_zone",),
     "key_e": ("key_e",),
     "key_f": ("key_f",),
-    "sell_all": ("微信截图_20260531175027",),
-    "quick_submit": ("微信截图_20260531174925",),
-    "confirm": ("微信截图_20260531175512",),
-    "close": ("微信截图_20260531175442",),
-    "fish_warehouse": ("渔获仓库", "渔获仓库2"),
-    "go_fishing": ("微信截图_20260531175556",),
+    "sell_all": ("shop_sell_all", "sell_all", "微信截图_20260531175027"),
+    "quick_submit": ("shop_quick_submit", "quick_submit", "微信截图_20260531174925"),
+    "confirm": ("dialog_confirm", "confirm", "微信截图_20260531175512"),
+    "close": ("dialog_close", "close", "微信截图_20260531175442"),
+    "fish_warehouse": (
+        "shop_fish_warehouse",
+        "shop_fish_warehouse_alt",
+        "fish_warehouse",
+        "fish_warehouse2",
+        "渔获仓库",
+        "渔获仓库2",
+    ),
+    "go_fishing": ("shop_go_fishing", "go_fishing", "微信截图_20260531175556"),
 }
 
 
@@ -63,12 +70,14 @@ class ImageRecognizer:
         self._init_catch_screen_template()
 
     def _init_catch_screen_template(self) -> None:
-        """从 1.png（完整截屏）裁剪底部 UI 区域作为辅助模板。
+        """从 scene_catch_screen_full.png（完整截屏）裁剪底部 UI 区域作为辅助模板。
 
         不同鱼获的图标会变，但底部 UI 框架/按钮是不变的，
         用这个裁剪区域做辅助匹配，提高 catch_success 的识别率。
         """
-        ref = self._load_template("1")
+        ref = self._load_template("scene_catch_screen_full")
+        if ref is None:
+            ref = self._load_template("1")
         if ref is None:
             return
         h, w = ref.shape[:2]
@@ -308,7 +317,7 @@ class ImageRecognizer:
 
         策略：
         1. 先用 catch_success / catch_fail 小模板精确匹配（全屏、多尺度、低阈值）
-        2. 若小模板未命中，用 1.png 底部 UI 裁剪区做场景级匹配
+        2. 若小模板未命中，用 scene_catch_screen_full.png 底部 UI 裁剪区做场景级匹配
         3. 场景匹配命中后，估算点击位置（底部中央）
         """
         search_full = self._relative_region(screenshot, 0.0, 0.0, 1.0, 1.0)
@@ -320,7 +329,7 @@ class ImageRecognizer:
                 return ("catch_success", success.center[0], success.center[1])
             return ("catch_fail", fail.center[0], fail.center[1])
 
-        # 小模板未命中 → 尝试场景级匹配（1.png 底部 UI 裁剪区）
+        # 小模板未命中 → 尝试场景级匹配（scene_catch_screen_full.png 底部 UI 裁剪区）
         scene_templ = self._template_cache.get("catch_screen_bottom")
         if scene_templ is not None:
             # 只在截图底部 40% 搜索，与裁剪区域对应

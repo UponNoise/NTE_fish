@@ -59,25 +59,39 @@ TEMPLATES: dict[str, tuple[int, int]] = {
     "key_f":               (32, 32),
     # 商店/鱼饵
     "bait_low_warning":    (100, 40),
-    # 出售相关（英文别名 + 中文原名都生成）
-    "sell_all":            (80, 36),
-    "quick_submit":        (80, 36),
-    "confirm":             (60, 32),
-    "close":               (32, 32),
-    "fish_warehouse":      (48, 48),
-    "fish_warehouse2":     (48, 48),
-    "go_fishing":          (80, 36),
+    # 商店/出售
+    "shop_sell_all":        (80, 36),
+    "shop_quick_submit":    (80, 36),
+    "shop_go_fishing":      (80, 36),
+    "shop_fish_warehouse":  (48, 48),
+    "shop_fish_warehouse_alt": (48, 48),
+    # 弹窗
+    "dialog_confirm":       (60, 32),
+    "dialog_close":         (32, 32),
+    # 场景参考
+    "scene_catch_screen_full": (1721, 997),
 }
 
 # 中文原名映射（确保代码别名能解析到文件）
 ALIAS_FILES: dict[str, str] = {
-    "微信截图_20260531175027": "sell_all",
-    "微信截图_20260531174925": "quick_submit",
-    "微信截图_20260531175512": "confirm",
-    "微信截图_20260531175442": "close",
-    "渔获仓库":                "fish_warehouse",
-    "渔获仓库2":               "fish_warehouse2",
-    "微信截图_20260531175556": "go_fishing",
+    # 旧英文名
+    "sell_all":              "shop_sell_all",
+    "quick_submit":          "shop_quick_submit",
+    "confirm":               "dialog_confirm",
+    "close":                 "dialog_close",
+    "fish_warehouse":        "shop_fish_warehouse",
+    "fish_warehouse2":       "shop_fish_warehouse_alt",
+    "go_fishing":            "shop_go_fishing",
+    # 中文旧名
+    "微信截图_20260531175027": "shop_sell_all",
+    "微信截图_20260531174925": "shop_quick_submit",
+    "微信截图_20260531175512": "dialog_confirm",
+    "微信截图_20260531175442": "dialog_close",
+    "渔获仓库":                "shop_fish_warehouse",
+    "渔获仓库2":               "shop_fish_warehouse_alt",
+    "微信截图_20260531175556": "shop_go_fishing",
+    # 数字旧名
+    "1":                      "scene_catch_screen_full",
 }
 
 
@@ -96,9 +110,6 @@ def main():
             import shutil
             shutil.copy2(src, dst)
             print(f"  → {alias_name}.png (copy of {target_name}.png)")
-
-    # 1.png 全屏截屏占位（用于 catch_screen_bottom 裁剪）
-    create_png(os.path.join(assets_dir, "1.png"), 1721, 997)
 
     print("\n完成！请用实际游戏截图替换这些占位文件。")
 
