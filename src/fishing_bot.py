@@ -11,7 +11,7 @@
 
 import time
 import threading
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 
@@ -160,23 +160,29 @@ class FishingBot:
             recog["reeling"] = reeling
             if reeling is None and time.time() - self._reel_start_time > 2.0:
                 # 遛鱼 UI 消失且已遛鱼超过 2s → 进入轮询等待 catch 结果
-                recog["reel_result"] = self._poll_catch_result()
+                polled = self._poll_catch_result()
+                if polled is not None:
+                    recog["reel_result"] = polled[0]
+                    recog["catch_position"] = (polled[1], polled[2])
         elif state == FishState.CHECK_BAIT:
             recog["bait_low"] = self.recognizer.detect_bait_low(screenshot)
 
         return recog
 
-    def _detect_reel_result(self, screenshot: np.ndarray) -> Optional[str]:
+    def _detect_reel_result(self, screenshot: np.ndarray) -> Optional[Tuple[str, int, int]]:
+        """单帧检测 catch 结果，返回 (结果名, x, y) 或 None。"""
         r = self.recognizer.detect_catch_result(screenshot, threshold=0.55)
         if r is None:
             return None
         name = r[0]
-        return "success" if "success" in name else "fail"
+        result = "success" if "success" in name else "fail"
+        return (result, r[1], r[2])
 
-    def _poll_catch_result(self, max_attempts: int = 40, interval: float = 0.12) -> Optional[str]:
+    def _poll_catch_result(self, max_attempts: int = 40, interval: float = 0.12) -> Optional[Tuple[str, int, int]]:
         """遛鱼结束后轮询检测 catch 结果，容忍过渡动画延迟。
 
         最多轮询 max_attempts 次（约 4.8 秒），在游戏过渡动画期间持续尝试。
+        返回 (结果名, click_x, click_y) 或 None。
         """
         for i in range(max_attempts):
             ss = self.capture.capture()
@@ -184,8 +190,8 @@ class FishingBot:
             if r is not None:
                 name = r[0]
                 result = "success" if "success" in name else "fail"
-                self._log(f"轮询第 {i+1} 次检测到结果: {result}")
-                return result
+                self._log(f"轮询第 {i+1} 次检测到结果: {result} @ ({r[1]},{r[2]})")
+                return (result, r[1], r[2])
             time.sleep(interval)
         return None
 
@@ -218,7 +224,7 @@ class FishingBot:
             self._log("遛鱼中 (A/D)...")
 
         elif state == FishState.COLLECT:
-            self._do_collect(screenshot)
+            self._do_collect(screenshot, recog)
 
         elif state == FishState.CHECK_BAIT:
             self._log("检查鱼饵...")
@@ -252,12 +258,13 @@ class FishingBot:
             if time.time() - self._reel_start_time > config.reel_timeout:
                 # 超时前最后尝试检测 catch 结果（可能模板匹配阈值刚好差一点）
                 ss = self.capture.capture()
-                result = self._detect_reel_result(ss)
-                if result:
-                    self._log(f"遛鱼超时但检测到结果: {result}")
-                    recog_dict = {"reel_result": result}
+                result_tuple = self._detect_reel_result(ss)
+                if result_tuple:
+                    result_name, cx, cy = result_tuple
+                    self._log(f"遛鱼超时但检测到结果: {result_name} @ ({cx},{cy})")
+                    recog_dict = {"reel_result": result_name, "catch_position": (cx, cy)}
                     if self.state_machine.next_state(recog_dict) == FishState.COLLECT:
-                        self._execute_entry(FishState.COLLECT, ss, {})
+                        self._execute_entry(FishState.COLLECT, ss, recog_dict)
                         self.state_machine.state = FishState.COLLECT
                         return
                 self._log("遛鱼超时，鱼可能跑了")
@@ -317,12 +324,24 @@ class FishingBot:
 
         self._log("[提示] 未识别到换鱼饵界面，跳过换饵并继续抛竿")
 
-    def _do_collect(self, screenshot: np.ndarray):
-        """点击收杆结果"""
+    def _do_collect(self, screenshot: np.ndarray, recog: dict = None):
+        """点击收杆结果。
+
+        优先使用 _poll_catch_result 传来的缓存坐标（最准确），
+        未命中时才用当前截图重新检测。
+        """
+        recog = recog or {}
+        cached = recog.get("catch_position")
+        if cached is not None:
+            self._click_capture_position(cached, "点击收杆结果（缓存坐标）")
+            time.sleep(1.0)
+            return
+
+        # 缓存未命中，重新检测
         r = self.recognizer.detect_catch_result(screenshot, threshold=0.55)
         if r:
             _, cx, cy = r
-            self._click_capture_position((cx, cy), "点击收杆结果")
+            self._click_capture_position((cx, cy), "点击收杆结果（实时检测）")
             time.sleep(1.0)
         else:
             self._log("[警告] 未找到收杆结果，跳过点击")

@@ -59,6 +59,23 @@ class ImageRecognizer:
     def __init__(self, assets_dir: Optional[str] = None):
         self.assets_dir = assets_dir or config.assets_dir
         self._template_cache: dict[str, np.ndarray] = {}
+        self._init_catch_screen_template()
+
+    def _init_catch_screen_template(self) -> None:
+        """从 1.png（完整截屏）裁剪底部 UI 区域作为辅助模板。
+
+        不同鱼获的图标会变，但底部 UI 框架/按钮是不变的，
+        用这个裁剪区域做辅助匹配，提高 catch_success 的识别率。
+        """
+        ref = self._load_template("1")
+        if ref is None:
+            return
+        h, w = ref.shape[:2]
+        # 裁剪底部 35% 区域（UI 按钮/框架，排除变化的鱼图标）
+        crop_top = int(h * 0.65)
+        cropped = ref[crop_top:h, 0:w]
+        if cropped.size > 0:
+            self._template_cache["catch_screen_bottom"] = cropped
 
     # ── 模板加载 ──
 
@@ -279,17 +296,40 @@ class ImageRecognizer:
     def detect_catch_result(self, screenshot: np.ndarray, threshold: float = 0.58) -> Optional[Tuple[str, int, int]]:
         """检测钓鱼成功或失败结果。
 
-        搜索全屏，使用更低阈值和多尺度以适应不同分辨率和 UI 缩放。
+        策略：
+        1. 先用 catch_success / catch_fail 小模板精确匹配（全屏、多尺度、低阈值）
+        2. 若小模板未命中，用 1.png 底部 UI 裁剪区做场景级匹配
+        3. 场景匹配命中后，估算点击位置（底部中央）
         """
-        search = self._relative_region(screenshot, 0.0, 0.0, 1.0, 1.0)
-        success = self.find_best(screenshot, "catch_success", threshold=threshold, region=search, scales=DEFAULT_SCALES)
-        fail = self.find_best(screenshot, "catch_fail", threshold=threshold, region=search, scales=DEFAULT_SCALES)
+        search_full = self._relative_region(screenshot, 0.0, 0.0, 1.0, 1.0)
+        success = self.find_best(screenshot, "catch_success", threshold=threshold, region=search_full, scales=DEFAULT_SCALES)
+        fail = self.find_best(screenshot, "catch_fail", threshold=threshold, region=search_full, scales=DEFAULT_SCALES)
 
-        if success is None and fail is None:
-            return None
-        if fail is None or (success is not None and success.confidence >= fail.confidence):
-            return ("catch_success", success.center[0], success.center[1])
-        return ("catch_fail", fail.center[0], fail.center[1])
+        if success is not None or fail is not None:
+            if fail is None or (success is not None and success.confidence >= fail.confidence):
+                return ("catch_success", success.center[0], success.center[1])
+            return ("catch_fail", fail.center[0], fail.center[1])
+
+        # 小模板未命中 → 尝试场景级匹配（1.png 底部 UI 裁剪区）
+        scene_templ = self._template_cache.get("catch_screen_bottom")
+        if scene_templ is not None:
+            # 只在截图底部 40% 搜索，与裁剪区域对应
+            bottom_region = self._relative_region(screenshot, 0.0, 0.60, 1.0, 0.40)
+            scene_match = self.find_best(
+                screenshot,
+                "catch_screen_bottom",
+                threshold=0.50,
+                region=bottom_region,
+                scales=(1.0, 0.9, 0.8),
+            )
+            if scene_match is not None:
+                # 场景匹配命中 → 点击底部中央
+                h, w = screenshot.shape[:2]
+                click_x = w // 2
+                click_y = int(h * 0.82)
+                return ("catch_success", click_x, click_y)
+
+        return None
 
     def detect_sell_buy_ui(self, screenshot: np.ndarray) -> dict:
         """检测出售/商店相关按钮。"""
